@@ -99,7 +99,8 @@ const authenticate = (req, res, next) => {
 };
 
 const authorize = (...roles) => (req, res, next) => {
-    if (!roles.includes(req.auth?.role)) return res.status(403).json({ error: 'Insufficient permissions' });
+    const role = req.auth?.role === 'seller' ? 'merchant' : req.auth?.role;
+    if (!roles.includes(role)) return res.status(403).json({ error: 'Insufficient permissions' });
     next();
 };
 
@@ -936,6 +937,30 @@ app.patch('/api/v2/admin/collectors/:id/status', authenticate, authorize('admin'
     } catch (error) { res.status(500).json({ error: 'Failed to update collector status' }); }
 });
 
+app.post('/api/v2/admin/login', async (req, res) => {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    try {
+        const result = await db.query(
+            'SELECT id, name, email, password_hash, active FROM admins WHERE email = $1',
+            [email]
+        );
+        if (!result.rows.length || !result.rows[0].active ||
+            !(await bcrypt.compare(password, result.rows[0].password_hash))) {
+            return res.status(401).json({ error: 'Invalid admin credentials' });
+        }
+        const admin = result.rows[0];
+        res.json({
+            admin: { id: admin.id, name: admin.name, email: admin.email },
+            token: signToken(admin, 'admin')
+        });
+    } catch (error) {
+        console.error('Admin login failed:', error);
+        res.status(500).json({ error: 'Admin login failed' });
+    }
+});
+
 app.get('/api/v2/admin/sellers', authenticate, authorize('admin'), async (req, res) => {
     try {
         const result = await db.query(`SELECT id, name, legal_name, email, phone,
@@ -963,6 +988,259 @@ app.patch('/api/v2/admin/sellers/:id/status', authenticate, authorize('admin'), 
         await audit(db, { actorId: req.auth.sub, actorRole: req.auth.role, action: 'SELLER_STATUS_CHANGED', entityType: 'seller', entityId: req.params.id, newValue: result.rows[0] });
         res.json({ seller: result.rows[0] });
     } catch (error) { res.status(500).json({ error: 'Failed to update seller status' }); }
+});
+
+app.get('/api/v2/products', authenticate, authorize('user'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT p.id, p.name, p.description, p.points_cost, p.stock,
+                p.seller_id, s.name AS seller_name, s.account_status AS seller_status
+            FROM seller_products p
+            JOIN sellers s ON s.id = p.seller_id
+            WHERE p.active = TRUE AND p.stock > 0
+            ORDER BY p.created_at DESC`);
+        res.json({ products: result.rows });
+    } catch (error) {
+        console.error('Product catalog load failed:', error);
+        res.status(500).json({ error: 'Failed to load products' });
+    }
+});
+
+app.get('/api/v2/user/product-orders', authenticate, authorize('user'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT o.id, o.product_id, o.product_name, o.points_cost, o.status,
+                o.created_at, o.updated_at, s.name AS seller_name
+            FROM product_orders o
+            JOIN sellers s ON s.id = o.seller_id
+            WHERE o.user_id = $1
+            ORDER BY o.created_at DESC`, [req.auth.sub]);
+        const userResult = await db.query('SELECT COALESCE(points, 0) AS points FROM users WHERE id = $1', [req.auth.sub]);
+        res.json({ orders: result.rows, points: Number(userResult.rows[0]?.points || 0) });
+    } catch (error) {
+        console.error('Product order history load failed:', error);
+        res.status(500).json({ error: 'Failed to load product orders' });
+    }
+});
+
+app.post('/api/v2/products/:productId/redeem', authenticate, authorize('user'), async (req, res) => {
+    const client = await db.connect();
+    try {
+        await client.query('BEGIN');
+        const userResult = await client.query('SELECT points FROM users WHERE id = $1 FOR UPDATE', [req.auth.sub]);
+        if (!userResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'User account not found' });
+        }
+        const productResult = await client.query(`SELECT p.id, p.seller_id, p.name, p.points_cost, p.stock
+            FROM seller_products p
+            JOIN sellers s ON s.id = p.seller_id
+            WHERE p.id = $1 AND p.active = TRUE AND s.account_status = 'VERIFIED'
+            FOR UPDATE OF p`, [req.params.productId]);
+        if (!productResult.rows.length || productResult.rows[0].stock < 1) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Product is unavailable' });
+        }
+        const product = productResult.rows[0];
+        if (Number(userResult.rows[0].points) < product.points_cost) {
+            await client.query('ROLLBACK');
+            return res.status(422).json({ error: 'Insufficient points' });
+        }
+        const stockResult = await client.query(`UPDATE seller_products
+            SET stock = stock - 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND stock > 0 RETURNING stock`, [product.id]);
+        if (!stockResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'Product is no longer in stock' });
+        }
+        const orderResult = await client.query(`INSERT INTO product_orders
+            (product_id, seller_id, user_id, product_name, points_cost, points_deducted)
+            VALUES ($1, $2, $3, $4, $5, FALSE)
+            RETURNING id, product_id, product_name, points_cost, status, points_deducted, created_at`,
+            [product.id, product.seller_id, req.auth.sub, product.name, product.points_cost]);
+        await audit(client, {
+            actorId: req.auth.sub,
+            actorRole: 'user',
+            action: 'PRODUCT_ORDER_REQUESTED',
+            entityType: 'product_order',
+            entityId: orderResult.rows[0].id,
+            newValue: orderResult.rows[0]
+        });
+        await client.query('COMMIT');
+        res.status(201).json({
+            order: orderResult.rows[0],
+            points: Number(userResult.rows[0].points),
+            stock: stockResult.rows[0].stock
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Product redemption failed:', error);
+        res.status(500).json({ error: 'Failed to redeem product' });
+    } finally {
+        client.release();
+    }
+});
+
+app.get('/api/v2/seller/products', authenticate, authorize('merchant'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT id, name, description, points_cost, stock, active, created_at
+            FROM seller_products WHERE seller_id = $1 ORDER BY created_at DESC`, [req.auth.sub]);
+        res.json({ products: result.rows });
+    } catch (error) {
+        console.error('Seller product list failed:', error);
+        res.status(500).json({ error: 'Failed to load seller products' });
+    }
+});
+
+app.post('/api/v2/seller/products', authenticate, authorize('merchant'), async (req, res) => {
+    const name = String(req.body.name || '').trim();
+    const description = String(req.body.description || '').trim();
+    const pointsCost = Number(req.body.points_cost);
+    const stock = Number(req.body.stock);
+    if (!name || name.length > 255 || !Number.isSafeInteger(pointsCost) || pointsCost < 1 ||
+        !Number.isSafeInteger(stock) || stock < 0) {
+        return res.status(422).json({ error: 'Provide a product name, positive whole-number points cost, and non-negative whole-number stock' });
+    }
+    try {
+        const seller = await db.query('SELECT account_status FROM sellers WHERE id = $1', [req.auth.sub]);
+        if (!seller.rows.length || seller.rows[0].account_status !== 'VERIFIED') {
+            return res.status(403).json({ error: 'Seller verification is required to list products' });
+        }
+        const result = await db.query(`INSERT INTO seller_products
+            (seller_id, name, description, points_cost, stock)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, description, points_cost, stock, active, created_at`,
+            [req.auth.sub, name, description || null, pointsCost, stock]);
+        res.status(201).json({ product: result.rows[0] });
+    } catch (error) {
+        console.error('Seller product creation failed:', error);
+        res.status(500).json({ error: 'Failed to create product' });
+    }
+});
+
+app.patch('/api/v2/seller/products/:productId', authenticate, authorize('merchant'), async (req, res) => {
+    const updates = [];
+    const values = [];
+    if (req.body.active !== undefined) {
+        if (typeof req.body.active !== 'boolean') {
+            return res.status(422).json({ error: 'Product active status must be true or false' });
+        }
+        values.push(req.body.active);
+        updates.push(`active = $${values.length}`);
+    }
+    if (req.body.stock !== undefined) {
+        const stock = Number(req.body.stock);
+        if (!Number.isSafeInteger(stock) || stock < 0) {
+            return res.status(422).json({ error: 'Product stock must be a non-negative whole number' });
+        }
+        values.push(stock);
+        updates.push(`stock = $${values.length}`);
+    }
+    if (!updates.length) return res.status(422).json({ error: 'Provide a product field to update' });
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(req.params.productId, req.auth.sub);
+    try {
+        const result = await db.query(`UPDATE seller_products SET ${updates.join(', ')}
+            WHERE id = $${values.length - 1} AND seller_id = $${values.length}
+            RETURNING id, name, description, points_cost, stock, active, created_at`,
+            values);
+        if (!result.rows.length) return res.status(404).json({ error: 'Product not found' });
+        res.json({ product: result.rows[0] });
+    } catch (error) {
+        console.error('Seller product update failed:', error);
+        res.status(500).json({ error: 'Failed to update product' });
+    }
+});
+
+app.get('/api/v2/seller/product-orders', authenticate, authorize('merchant'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT o.id, o.product_id, o.product_name, o.points_cost, o.status,
+                o.created_at, o.updated_at, u.name AS user_name, u.email AS user_email
+            FROM product_orders o
+            JOIN users u ON u.id = o.user_id
+            WHERE o.seller_id = $1
+            ORDER BY o.created_at DESC`, [req.auth.sub]);
+        res.json({ orders: result.rows });
+    } catch (error) {
+        console.error('Seller product order load failed:', error);
+        res.status(500).json({ error: 'Failed to load product orders' });
+    }
+});
+
+app.patch('/api/v2/seller/product-orders/:orderId', authenticate, authorize('merchant'), async (req, res) => {
+    const status = req.body.status;
+    if (!['approved', 'rejected', 'fulfilled'].includes(status)) {
+        return res.status(422).json({ error: 'Status must be approved, rejected, or fulfilled' });
+    }
+    const client = await db.connect();
+    try {
+        await client.query('BEGIN');
+        const orderResult = await client.query(`SELECT id, product_id, user_id, product_name, points_cost,
+                status, points_deducted
+            FROM product_orders WHERE id = $1 AND seller_id = $2 FOR UPDATE`, [req.params.orderId, req.auth.sub]);
+        if (!orderResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Product order not found' });
+        }
+        const order = orderResult.rows[0];
+        const allowedTransition = (order.status === 'pending' && ['approved', 'rejected'].includes(status)) ||
+            (order.status === 'approved' && status === 'fulfilled');
+        if (!allowedTransition) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'This order cannot be moved to the requested status' });
+        }
+        let updatedUserPoints = null;
+        if (status === 'approved' && !order.points_deducted) {
+            const userResult = await client.query('SELECT points FROM users WHERE id = $1 FOR UPDATE', [order.user_id]);
+            if (!userResult.rows.length || Number(userResult.rows[0].points) < order.points_cost) {
+                await client.query('ROLLBACK');
+                return res.status(422).json({ error: 'The customer no longer has enough points to confirm this order' });
+            }
+            const debitResult = await client.query(`UPDATE users SET points = points - $1
+                WHERE id = $2 AND points >= $1 RETURNING points`, [order.points_cost, order.user_id]);
+            if (!debitResult.rows.length) {
+                await client.query('ROLLBACK');
+                return res.status(422).json({ error: 'The customer no longer has enough points to confirm this order' });
+            }
+            updatedUserPoints = Number(debitResult.rows[0].points);
+            await client.query(`INSERT INTO point_ledger (user_id, request_id, points, reason)
+                VALUES ($1, NULL, $2, 'product_redemption')`, [order.user_id, -order.points_cost]);
+        }
+        if (status === 'rejected') {
+            if (order.points_deducted) {
+                const refundResult = await client.query('UPDATE users SET points = points + $1 WHERE id = $2 RETURNING points', [order.points_cost, order.user_id]);
+                updatedUserPoints = Number(refundResult.rows[0].points);
+                await client.query(`INSERT INTO point_ledger (user_id, request_id, points, reason)
+                    VALUES ($1, NULL, $2, 'product_redemption_refund')`, [order.user_id, order.points_cost]);
+            }
+            if (order.product_id) {
+                await client.query(`UPDATE seller_products SET stock = stock + 1, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $1`, [order.product_id]);
+            }
+        }
+        const updated = await client.query(`UPDATE product_orders
+            SET status = $1::varchar,
+                points_deducted = CASE WHEN $1::text = 'approved' THEN TRUE ELSE points_deducted END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            RETURNING id, product_id, product_name, points_cost, status, points_deducted, created_at, updated_at`,
+            [status, order.id]);
+        await audit(client, {
+            actorId: req.auth.sub,
+            actorRole: 'merchant',
+            action: `PRODUCT_ORDER_${status.toUpperCase()}`,
+            entityType: 'product_order',
+            entityId: order.id,
+            previousValue: { status: order.status },
+            newValue: { status }
+        });
+        await client.query('COMMIT');
+        res.json({ order: updated.rows[0], ...(updatedUserPoints !== null ? { points: updatedUserPoints } : {}) });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Seller product order update failed:', error);
+        res.status(500).json({ error: 'Failed to update product order' });
+    } finally {
+        client.release();
+    }
 });
 
 app.post('/api/v2/rewards/:rewardId/issue', authenticate, authorize('user'), async (req, res) => {
@@ -1451,6 +1729,30 @@ const applyPlatformMigration = async () => {
     }
 };
 
+const applySellerProductsMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '005_seller_products.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
+const applyDeferredProductPointsMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '007_defer_product_points_charge.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
+const applyAdminAccountsMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '006_admin_accounts.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
 Promise.all([
     db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image TEXT'),
     db.query('ALTER TABLE sellers ADD COLUMN IF NOT EXISTS profile_image TEXT'),
@@ -1465,7 +1767,9 @@ Promise.all([
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (request_id, collector_id)
     )`),
-    applyPlatformMigration()
+    applyPlatformMigration(),
+    applySellerProductsMigration().then(() => applyDeferredProductPointsMigration()),
+    applyAdminAccountsMigration()
 ]).then(() => {
     setInterval(processNotificationOutbox, 5000);
     app.listen(PORT, () => {

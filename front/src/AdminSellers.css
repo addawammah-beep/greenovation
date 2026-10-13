@@ -1,0 +1,165 @@
+.admin-sellers-page {
+  width: min(100% - 32px, 1000px);
+  margin: 40px auto;
+  color: #263238;
+  font-family: Arial, sans-serif;
+}
+
+.admin-sellers-header,
+.admin-login-card,
+.admin-seller-list {
+  padding: 24px;
+  border: 1px solid #dfe7e2;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.admin-sellers-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.admin-sellers-header > p {
+  flex-basis: 100%;
+  margin: 0;
+  color: #27ae60;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.admin-sellers-header h1,
+.admin-seller-list h2 {
+  margin: 0;
+  color: #174a38;
+}
+
+.admin-sellers-header button,
+.admin-seller-list-heading button,
+.admin-login-card button,
+.admin-seller-actions button {
+  min-height: 40px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 4px;
+  background: #174a38;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.admin-login-card {
+  display: grid;
+  gap: 15px;
+  max-width: 460px;
+  margin: 70px auto;
+}
+
+.admin-login-card h2 {
+  margin: 0;
+  color: #174a38;
+}
+
+.admin-login-card label {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.admin-login-card input {
+  padding: 11px;
+  border: 1px solid #cbd3d7;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.admin-login-card p {
+  margin: 0;
+  color: #6d7a81;
+  line-height: 1.5;
+}
+
+.admin-seller-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.admin-seller-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 0;
+  border-top: 1px solid #e0e4e6;
+}
+
+.admin-seller-card h3 {
+  margin: 6px 0;
+  color: #203a30;
+}
+
+.admin-seller-card h3 small {
+  color: #66747b;
+}
+
+.admin-seller-card p {
+  margin: 6px 0;
+  color: #56656c;
+}
+
+.admin-seller-card .admin-seller-status {
+  color: #8a6500;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.admin-seller-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+
+.admin-seller-actions .reject {
+  background: #8b3f3f;
+}
+
+.admin-sellers-message {
+  margin: 0 0 16px;
+  padding: 12px 15px;
+  border-radius: 4px;
+}
+
+.admin-sellers-message.error {
+  background: #fff1f0;
+  color: #8b241c;
+}
+
+.admin-sellers-message.success {
+  background: #edf7ef;
+  color: #174a38;
+}
+
+.admin-sellers-page button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+@media (max-width: 640px) {
+  .admin-seller-card {
+    flex-direction: column;
+  }
+
+  .admin-seller-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

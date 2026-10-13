@@ -24,6 +24,12 @@ const Offers = ({ setUser }) => {
   const [rewardSaving, setRewardSaving] = useState(false);
   const [rewardError, setRewardError] = useState('');
   const [rewardForm, setRewardForm] = useState({ name: '', points_cost: '', value_amount: '', currency: 'EGP' });
+  const [sellerProducts, setSellerProducts] = useState([]);
+  const [productOrders, setProductOrders] = useState([]);
+  const [productForm, setProductForm] = useState({ name: '', description: '', points_cost: '', stock: '' });
+  const [productSaving, setProductSaving] = useState(false);
+  const [marketplaceError, setMarketplaceError] = useState('');
+  const [updatingOrderId, setUpdatingOrderId] = useState(null);
   
   // Added duration to the form state to be saved in DB
   const [form, setForm] = useState({
@@ -59,6 +65,7 @@ const Offers = ({ setUser }) => {
     if (storedUser) {
       fetchOffers(storedUser.id);
       fetchSellerRewards(storedUser.id);
+      fetchSellerMarketplace();
       if (storedUser.gps) {
         setForm(prev => ({ ...prev, gps: storedUser.gps }));
       }
@@ -88,7 +95,8 @@ const Offers = ({ setUser }) => {
   const refreshSellerData = async () => {
     await Promise.all([
       fetchOffers(userData.id),
-      fetchSellerRewards(userData.id)
+      fetchSellerRewards(userData.id),
+      fetchSellerMarketplace()
     ]);
   };
 
@@ -112,6 +120,126 @@ const Offers = ({ setUser }) => {
       setTotalCodesIssued(data.total_codes_issued || 0);
     } catch (loadError) {
       setRewardError(loadError.message || 'Failed to load discount rewards');
+    }
+  };
+
+  const fetchSellerMarketplace = async () => {
+    try {
+      const headers = { Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}` };
+      const [productsResponse, ordersResponse] = await Promise.all([
+        fetch('http://localhost:4000/api/v2/seller/products', { headers }),
+        fetch('http://localhost:4000/api/v2/seller/product-orders', { headers })
+      ]);
+      const [productsData, ordersData] = await Promise.all([
+        productsResponse.json(),
+        ordersResponse.json()
+      ]);
+      if (!productsResponse.ok) throw new Error(productsData.error || 'Failed to load products');
+      if (!ordersResponse.ok) throw new Error(ordersData.error || 'Failed to load product orders');
+      setSellerProducts(productsData.products || []);
+      setProductOrders(ordersData.orders || []);
+      setMarketplaceError('');
+    } catch (loadError) {
+      setMarketplaceError(loadError.message || 'Failed to load seller products and orders');
+    }
+  };
+
+  const handleProductFormChange = (event) => {
+    setProductForm(current => ({ ...current, [event.target.name]: event.target.value }));
+  };
+
+  const handleCreateProduct = async (event) => {
+    event.preventDefault();
+    try {
+      setProductSaving(true);
+      setMarketplaceError('');
+      const response = await fetch('http://localhost:4000/api/v2/seller/products', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
+        },
+        body: JSON.stringify(productForm)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to create product');
+      setSellerProducts(current => [data.product, ...current]);
+      setProductForm({ name: '', description: '', points_cost: '', stock: '' });
+    } catch (saveError) {
+      setMarketplaceError(saveError.message || 'Failed to create product');
+    } finally {
+      setProductSaving(false);
+    }
+  };
+
+  const handleProductAvailability = async (product) => {
+    try {
+      setMarketplaceError('');
+      const response = await fetch(`http://localhost:4000/api/v2/seller/products/${product.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
+        },
+        body: JSON.stringify({ active: !product.active })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to update product');
+      setSellerProducts(current => current.map(item => item.id === product.id ? data.product : item));
+    } catch (updateError) {
+      setMarketplaceError(updateError.message || 'Failed to update product');
+    }
+  };
+
+  const handleProductStock = async (product, change) => {
+    const stock = product.stock + change;
+    if (stock < 0) return;
+    try {
+      setMarketplaceError('');
+      const response = await fetch(`http://localhost:4000/api/v2/seller/products/${product.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
+        },
+        body: JSON.stringify({ stock })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to update product stock');
+      setSellerProducts(current => current.map(item => item.id === product.id ? data.product : item));
+    } catch (updateError) {
+      setMarketplaceError(updateError.message || 'Failed to update product stock');
+    }
+  };
+
+  const handleProductOrderUpdate = async (order, status) => {
+    try {
+      setUpdatingOrderId(order.id);
+      setMarketplaceError('');
+      const response = await fetch(`http://localhost:4000/api/v2/seller/product-orders/${order.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
+        },
+        body: JSON.stringify({ status })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data.error && data.error !== 'Failed to update product order'
+          ? data.error
+          : `Failed to update product order (HTTP ${response.status})`;
+        console.error('Seller product order update failed:', response.status, data);
+        throw new Error(message);
+      }
+      setProductOrders(current => current.map(item => item.id === order.id ? { ...item, ...data.order } : item));
+      if (status === 'rejected' && order.product_id) {
+        await fetchSellerMarketplace();
+      }
+    } catch (updateError) {
+      setMarketplaceError(updateError.message || 'Failed to update product order');
+    } finally {
+      setUpdatingOrderId(null);
     }
   };
 
@@ -382,7 +510,10 @@ const Offers = ({ setUser }) => {
       <AccountSidebar
         userData={userData}
         userType="seller"
-        sections={[{ id: 'offers', label: 'My Offers' }]}
+        sections={[
+          { id: 'product-orders', label: 'Pickup orders' },
+          { id: 'offers', label: 'My Offers' }
+        ]}
         onRefresh={refreshSellerData}
         refreshing={loading}
         onSignOut={handleSignOut}
@@ -434,6 +565,57 @@ const Offers = ({ setUser }) => {
               <span>{reward.codes_issued} codes issued</span>
             </article>
           )) : <p>No discount rewards created yet.</p>}
+        </div>
+      </section>
+      <section className="seller-products-panel" aria-labelledby="seller-products-title">
+        <div className="seller-rewards-heading">
+          <div><p className="dashboard-label">POINTS SHOP</p><h2 id="seller-products-title">Products and pickup orders</h2></div>
+        </div>
+        {marketplaceError && <p className="seller-reward-error" role="alert">{marketplaceError}</p>}
+        <div className="seller-product-orders" id="product-orders">
+          <h3>Pickup orders ({productOrders.filter(order => order.status === 'pending').length} awaiting confirmation)</h3>
+          <p className="seller-product-orders-account">
+            Orders for seller account #{userData.id} ({userData.name || 'Seller'}).
+          </p>
+          {productOrders.length ? productOrders.map(order => (
+            <article className="seller-product-order-row" key={order.id}>
+              <div><strong>{order.product_name}</strong><span>{order.points_cost} points · {order.user_name} ({order.user_email})</span></div>
+              <span className={`product-order-status ${order.status}`}>{order.status}</span>
+              {order.status === 'pending' && (
+                <div className="seller-product-order-actions">
+                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'approved')}>Confirm order and deduct points</button>
+                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'rejected')}>Reject and release stock</button>
+                </div>
+              )}
+              {order.status === 'approved' && (
+                <>
+                  <span>Confirmed; customer points deducted.</span>
+                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'fulfilled')}>Mark picked up</button>
+                </>
+              )}
+            </article>
+          )) : <p>No pickup orders for this seller account. Check that you are signed in as seller #5 and refresh this page.</p>}
+        </div>
+        <form className="seller-product-form" onSubmit={handleCreateProduct}>
+          <label>Product name<input name="name" value={productForm.name} onChange={handleProductFormChange} maxLength="255" required /></label>
+          <label>Points cost<input name="points_cost" type="number" min="1" step="1" value={productForm.points_cost} onChange={handleProductFormChange} required /></label>
+          <label>Stock<input name="stock" type="number" min="0" step="1" value={productForm.stock} onChange={handleProductFormChange} required /></label>
+          <label className="seller-product-description">Description<textarea name="description" value={productForm.description} onChange={handleProductFormChange} rows="2" /></label>
+          <button type="submit" disabled={productSaving || sellerStatus !== 'VERIFIED'}>{productSaving ? 'Saving...' : 'Add product'}</button>
+        </form>
+        <div className="seller-product-list">
+          <h3>My products</h3>
+          {sellerProducts.length ? sellerProducts.map(product => (
+            <article className="seller-product-row" key={product.id}>
+              <strong>{product.name}</strong>
+              <span>{product.points_cost} points</span>
+              <span>{product.stock} in stock</span>
+              <span>{product.active ? 'Active' : 'Hidden'}</span>
+              <button type="button" disabled={product.stock === 0} onClick={() => handleProductStock(product, -1)}>−1 stock</button>
+              <button type="button" onClick={() => handleProductStock(product, 1)}>+1 stock</button>
+              <button type="button" onClick={() => handleProductAvailability(product)}>{product.active ? 'Hide listing' : 'Show listing'}</button>
+            </article>
+          )) : <p>No products listed yet.</p>}
         </div>
       </section>
       <section className="coupon-lookup-panel" aria-labelledby="coupon-lookup-title">

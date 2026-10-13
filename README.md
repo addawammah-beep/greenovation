@@ -23,6 +23,12 @@ Greenovation coordinates verified recyclable-material collections from waste own
 
 The API listens on `http://localhost:4000`; the React development server normally listens on `http://localhost:3000`.
 
+## Admin seller verification
+
+Seller applications can be reviewed at `http://localhost:3000/admin`. Admins sign in with a dedicated account; seller accounts cannot approve themselves.
+
+To create the first admin locally, set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in the environment used by the backend, optionally set `ADMIN_NAME`, then run `cd back && npm run admin:create`. Use a unique password of at least 12 characters. The admin account is stored with a bcrypt password hash. Do not commit admin credentials or share them with sellers.
+
 ## Secure API workflow
 
 The login response now contains a short-lived JWT. The secure workflow is under `/api/v2`:

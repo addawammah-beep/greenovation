@@ -6,6 +6,8 @@
     "test": "node --test domain.test.js",
     "start": "nodemon server.js",
     "db:migrate": "node migrate.js",
+    "admin:create": "node create-admin.js",
+    "admin:reset-password": "node reset-admin-password.js",
     "db:setup": "node [setup-database.js](http://_vscodecontentref_/1)",
     "db:reset": "node [reset-database.js](http://_vscodecontentref_/2)"
   },

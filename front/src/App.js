@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
+import AdminSellers from './AdminSellers';
 import Collectors from './Collectors';
 import Contact_section from './Contact_section'; // صفحة الشات الجديدة
 import Header from './Header';
@@ -22,7 +23,7 @@ function App() {
   const handleOpenLogin = () => setShowLogin(true);    
   const handleCloseLogin = () => setShowLogin(false);  
   const location = useLocation();
-  const subpagePaths = ['/profile', '/requests', '/collectors', '/offers'];
+  const subpagePaths = ['/profile', '/requests', '/collectors', '/offers', '/admin'];
   const isSubpage = subpagePaths.includes(location.pathname.toLowerCase());
 
   return (
@@ -46,6 +47,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/admin" element={<AdminSellers />} />
 
           <Route
             path="/profile"

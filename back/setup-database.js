@@ -61,6 +61,19 @@ async function setupDatabase() {
         await db.query('ALTER TABLE collectors ADD COLUMN IF NOT EXISTS age INTEGER');
         await db.query('ALTER TABLE collectors ADD COLUMN IF NOT EXISTS experience_years INTEGER');
 
+        // Create administrator accounts used for seller verification
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS admins (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255),
+                email VARCHAR(255) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('✅ Admins table created');
+
         // Create requests table
         await db.query(`
             CREATE TABLE IF NOT EXISTS requests (

@@ -45,6 +45,12 @@ function Profile({ setUser }) {
   const [requestActionError, setRequestActionError] = useState('');
   const [requestCreateError, setRequestCreateError] = useState('');
   const [coupons, setCoupons] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [sellerProducts, setSellerProducts] = useState([]);
+  const [productOrders, setProductOrders] = useState([]);
+  const [productOrderSyncError, setProductOrderSyncError] = useState('');
+  const [redeemingProductId, setRedeemingProductId] = useState(null);
+  const [updatingProductOrderId, setUpdatingProductOrderId] = useState(null);
 
   const getCompletionDuration = (request) => {
     if (!request.collected_at || !request.completed_at) return null;
@@ -89,6 +95,24 @@ function Profile({ setUser }) {
             localStorage.setItem('greenovation_user', JSON.stringify(updatedUser));
           }
         }
+        const headers = { Authorization: `Bearer ${token || ''}` };
+        const [productsResponse, ordersResponse] = await Promise.all([
+          fetch('http://localhost:4000/api/v2/products', { headers }),
+          fetch('http://localhost:4000/api/v2/user/product-orders', { headers })
+        ]);
+        const [productsData, ordersData] = await Promise.all([
+          productsResponse.json(),
+          ordersResponse.json()
+        ]);
+        if (!productsResponse.ok) throw new Error(productsData.error || 'Failed to load products');
+        if (!ordersResponse.ok) throw new Error(ordersData.error || 'Failed to load product orders');
+        setProducts(productsData.products || []);
+        setProductOrders(ordersData.orders || []);
+        if (ordersData.points !== undefined) {
+          const updatedUser = { ...user, points: Number(ordersData.points) };
+          setUserData(updatedUser);
+          localStorage.setItem('greenovation_user', JSON.stringify(updatedUser));
+        }
       } else if (type === "collector") {
         // جلب العروض المتاحة للمجمعين فقط من قاعدة البيانات
         const res = await fetch(`http://localhost:4000/api/offers`); // افترضنا أن هذا المسار يجلب كل العروض
@@ -96,11 +120,131 @@ function Profile({ setUser }) {
           const data = await res.json();
           setOffers(data);
         }
+      } else if (type === "seller") {
+        const token = localStorage.getItem('greenovation_token');
+        const response = await fetch('http://localhost:4000/api/v2/seller/products', {
+          headers: { Authorization: `Bearer ${token || ''}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to load seller products');
+        setSellerProducts(data.products || []);
+        const ordersResponse = await fetch('http://localhost:4000/api/v2/seller/product-orders', {
+          headers: { Authorization: `Bearer ${token || ''}` }
+        });
+        const ordersData = await ordersResponse.json();
+        if (!ordersResponse.ok) throw new Error(ordersData.error || 'Failed to load seller product orders');
+        setProductOrders(ordersData.orders || []);
       }
       setLoading(false);
     } catch (error) {
+      setRequestActionError(error.message || 'Failed to load profile data');
       console.error("Error fetching data:", error);
       setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (userType !== 'user' || !userData?.id) return undefined;
+
+    let active = true;
+    let refreshing = false;
+    const refreshProductOrders = async () => {
+      if (refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      try {
+        const token = localStorage.getItem('greenovation_token');
+        const response = await fetch('http://localhost:4000/api/v2/user/product-orders', {
+          headers: { Authorization: `Bearer ${token || ''}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to refresh product orders');
+        if (!active) return;
+
+        setProductOrders(data.orders || []);
+        if (data.points !== undefined) {
+          const points = Number(data.points);
+          setUserData(current => {
+            if (!current || Number(current.points) === points) return current;
+            const updatedUser = { ...current, points };
+            localStorage.setItem('greenovation_user', JSON.stringify(updatedUser));
+            return updatedUser;
+          });
+        }
+        setProductOrderSyncError('');
+      } catch (error) {
+        if (active) setProductOrderSyncError(error.message || 'Failed to refresh product orders');
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const intervalId = setInterval(refreshProductOrders, 5000);
+    window.addEventListener('focus', refreshProductOrders);
+    document.addEventListener('visibilitychange', refreshProductOrders);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+      window.removeEventListener('focus', refreshProductOrders);
+      document.removeEventListener('visibilitychange', refreshProductOrders);
+    };
+  }, [userType, userData?.id]);
+
+  const handleRedeemProduct = async (product) => {
+    try {
+      setRedeemingProductId(product.id);
+      setRequestActionError('');
+      const token = localStorage.getItem('greenovation_token');
+      const response = await fetch(`http://localhost:4000/api/v2/products/${product.id}/redeem`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token || ''}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to redeem product');
+      setProductOrders(current => [{ ...data.order, seller_name: product.seller_name }, ...current]);
+      setProducts(current => current
+        .map(item => item.id === product.id ? { ...item, stock: data.stock } : item)
+        .filter(item => item.stock > 0));
+      const updatedUser = { ...userData, points: data.points };
+      setUserData(updatedUser);
+      localStorage.setItem('greenovation_user', JSON.stringify(updatedUser));
+    } catch (error) {
+      setRequestActionError(error.message || 'Unable to redeem product');
+    } finally {
+      setRedeemingProductId(null);
+    }
+  };
+
+  const handleSellerProductOrderUpdate = async (order, status) => {
+    try {
+      setUpdatingProductOrderId(order.id);
+      setRequestActionError('');
+      const token = localStorage.getItem('greenovation_token');
+      if (!token) throw new Error('Your session has expired. Please sign in again.');
+      const response = await fetch(`http://localhost:4000/api/v2/seller/product-orders/${order.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ status })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data.error && data.error !== 'Failed to update product order'
+          ? data.error
+          : `Failed to update product order (HTTP ${response.status})`;
+        console.error('Seller product order update failed:', response.status, data);
+        throw new Error(message);
+      }
+      if (!data.order) throw new Error('The server did not return the updated order. Please refresh and check its status.');
+      setProductOrders(current => current.map(item => String(item.id) === String(order.id)
+        ? { ...item, ...data.order }
+        : item));
+      if (status === 'rejected') await fetchUserData(userData, 'seller');
+    } catch (error) {
+      setRequestActionError(error.message || 'Failed to update product order');
+    } finally {
+      setUpdatingProductOrderId(null);
     }
   };
 
@@ -329,6 +473,44 @@ function Profile({ setUser }) {
                 <div><h3>Used / Expired Coupons</h3><div className="coupon-grid">{inactiveCoupons.length ? inactiveCoupons.map(renderCoupon) : <p className="profile-empty-state">No used or expired coupons.</p>}</div></div>
               </div>
             </section>
+            <section className="user-request-section product-catalog-section">
+              <div className="user-request-section-heading"><p className="dashboard-label">POINTS SHOP</p><h2>Available Products</h2><p>Choose an in-stock product to request it from the seller. Points are deducted only after the seller confirms your order.</p></div>
+              {products.length ? (
+                <div className="product-catalog-grid">
+                  {products.map(product => (
+                    <article className="product-catalog-card" key={product.id}>
+                      <h3>{product.name}</h3>
+                      <p className="product-seller-name">Sold by {product.seller_name}</p>
+                      {product.seller_status !== 'VERIFIED' && <p className="product-seller-pending">Seller verification pending — redemption unavailable.</p>}
+                      {product.description && <p>{product.description}</p>}
+                      <p><b>{product.points_cost} points</b> · {product.stock} available</p>
+                      <button
+                        type="button"
+                        disabled={product.seller_status !== 'VERIFIED' || redeemingProductId === product.id || Number(userData.points || 0) < product.points_cost}
+                        onClick={() => handleRedeemProduct(product)}
+                      >
+                        {product.seller_status !== 'VERIFIED' ? 'Unavailable until verified' : redeemingProductId === product.id ? 'Requesting...' : Number(userData.points || 0) < product.points_cost ? 'Not enough points' : 'Request from seller'}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : <p className="profile-empty-state">No products are available right now.</p>}
+              <div className="product-order-history">
+                <h3>My Product Orders</h3>
+                {productOrderSyncError && <p className="profile-request-action-error" role="alert">{productOrderSyncError}</p>}
+                {productOrders.length ? productOrders.map(order => (
+                  <article className="product-order-row" key={order.id}>
+                    <strong>{order.product_name}</strong>
+                    <span>{order.points_cost} points</span>
+                    <span>Seller: {order.seller_name || 'Seller'}</span>
+                    <span className={`product-order-status ${order.status}`}>
+                      {order.status === 'pending' ? 'Awaiting seller confirmation · points not deducted' : order.status === 'approved' ? 'Confirmed · points deducted' : order.status === 'fulfilled' ? 'Picked up' : 'Rejected'}
+                    </span>
+                    <small>{new Date(order.created_at).toLocaleString()}</small>
+                  </article>
+                )) : <p className="profile-empty-state">No product orders yet.</p>}
+              </div>
+            </section>
             <section className="user-request-section add-request-section">
               <div className="user-request-section-heading"><p className="dashboard-label">NEW COLLECTION</p><h2>Add a Request</h2><p>Create a new recycling collection request from your dashboard.</p></div>
               <button type="button" className="profile-add-request-button" onClick={() => { setShowRequestForm(!showRequestForm); setRequestCreateError(''); }}>{showRequestForm ? 'Cancel' : '+ New Request'}</button>
@@ -368,15 +550,79 @@ function Profile({ setUser }) {
 
         {/* قسم البائع */}
         {userType === "seller" && (
-          <div className="profile-info">
-            <h2>Seller Information</h2>
-            <p><b>Name:</b> {userData.name}</p>
-            <p><b>Email:</b> {userData.email}</p>
-            <p><b>Phone:</b> {userData.phone || 'Not provided'}</p>
-            <p><b>Registry:</b> {userData.registry}</p>
-            <p><b>Location:</b> {userData.gps || 'Not provided'}</p>
-            <p><b>Points:</b> {userData.points || 0}</p>
-          </div>
+          <>
+            <div className="profile-info">
+              <h2>Seller Information</h2>
+              <p><b>Name:</b> {userData.name}</p>
+              <p><b>Email:</b> {userData.email}</p>
+              <p><b>Phone:</b> {userData.phone || 'Not provided'}</p>
+              <p><b>Registry:</b> {userData.registry}</p>
+              <p><b>Location:</b> {userData.gps || 'Not provided'}</p>
+              <p><b>Points:</b> {userData.points || 0}</p>
+            </div>
+            <section id="offers" className="user-request-section product-catalog-section">
+              <div className="user-request-section-heading">
+                <p className="dashboard-label">SELLER OFFERS</p>
+                <h2>My Offers and Pickup Orders</h2>
+                <p>Manage your products and confirm customer orders from here.</p>
+              </div>
+              {requestActionError && <p className="profile-request-action-error" role="alert">{requestActionError}</p>}
+              <div className="seller-profile-orders">
+                <h3>Customer pickup orders</h3>
+                {loading ? <p>Loading your orders...</p> : productOrders.length ? productOrders.map(order => (
+                  <article className="seller-profile-order" key={order.id}>
+                    <div>
+                      <strong>{order.product_name}</strong>
+                      <p>{order.points_cost} points · {order.user_name} ({order.user_email})</p>
+                    </div>
+                    <span className={`product-order-status ${order.status}`}>{order.status}</span>
+                    {order.status === 'pending' && (
+                      <div className="seller-profile-order-actions">
+                        <button
+                          type="button"
+                          disabled={updatingProductOrderId === order.id}
+                          onClick={() => handleSellerProductOrderUpdate(order, 'approved')}
+                        >
+                          {updatingProductOrderId === order.id ? 'Updating...' : 'Confirm order and deduct points'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updatingProductOrderId === order.id}
+                          onClick={() => handleSellerProductOrderUpdate(order, 'rejected')}
+                        >
+                          Reject order
+                        </button>
+                      </div>
+                    )}
+                    {order.status === 'approved' && (
+                      <button
+                        type="button"
+                        disabled={updatingProductOrderId === order.id}
+                        onClick={() => handleSellerProductOrderUpdate(order, 'fulfilled')}
+                      >
+                        Mark picked up
+                      </button>
+                    )}
+                  </article>
+                )) : <p className="profile-empty-state">No customer pickup orders yet.</p>}
+              </div>
+              <h3 className="seller-profile-products-title">My Products</h3>
+              {sellerProducts.length ? (
+                <div className="product-catalog-grid">
+                  {sellerProducts.map(product => (
+                    <article className="product-catalog-card" key={product.id}>
+                      <h3>{product.name}</h3>
+                      {product.description && <p>{product.description}</p>}
+                      <p><b>{product.points_cost} points</b> · {product.stock} in stock</p>
+                      <span className={`product-order-status ${product.active ? 'approved' : 'rejected'}`}>
+                        {product.active ? 'Active listing' : 'Hidden listing'}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              ) : <p className="profile-empty-state">No products listed for this seller account yet.</p>}
+            </section>
+          </>
         )}
 
         {/* قسم المجمع (Collector) - هنا تظهر العروض */}

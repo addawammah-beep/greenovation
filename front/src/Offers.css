@@ -878,6 +878,128 @@
   box-sizing: border-box;
 }
 
+.seller-products-panel {
+  margin: 30px 0;
+  padding: 24px;
+  border: 1px solid #dfe7e2;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.seller-product-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 20px 0 30px;
+}
+
+.seller-product-form label {
+  display: grid;
+  gap: 6px;
+  color: #40534a;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.seller-product-form input,
+.seller-product-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #cbd3d7;
+  border-radius: 3px;
+  font: inherit;
+}
+
+.seller-product-description {
+  grid-column: span 2;
+}
+
+.seller-product-form button,
+.seller-product-row button,
+.seller-product-order-row button,
+.seller-product-order-actions button {
+  align-self: end;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 3px;
+  background: #174a38;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.seller-product-form button:disabled,
+.seller-product-order-row button:disabled,
+.seller-product-order-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.seller-product-list,
+.seller-product-orders {
+  margin-top: 24px;
+}
+
+.seller-product-list h3,
+.seller-product-orders h3 {
+  color: #203a30;
+}
+
+.seller-product-orders-account {
+  margin: -6px 0 12px;
+  color: #66747b;
+  font-size: 0.9rem;
+}
+
+.seller-product-row,
+.seller-product-order-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 14px 0;
+  border-bottom: 1px solid #e0e4e6;
+  color: #495057;
+}
+
+.seller-product-row strong,
+.seller-product-order-row strong {
+  color: #203a30;
+}
+
+.seller-product-row button {
+  margin-left: auto;
+  background: #6c757d;
+}
+
+.seller-product-order-row > div:first-child {
+  display: grid;
+  gap: 5px;
+  flex: 1 1 240px;
+}
+
+.seller-product-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.seller-product-order-actions button:last-child {
+  background: #8b3f3f;
+}
+
+@media (max-width: 680px) {
+  .seller-products-panel { padding: 18px; }
+  .seller-product-form { grid-template-columns: 1fr; }
+  .seller-product-description { grid-column: auto; }
+  .seller-product-row,
+  .seller-product-order-row { align-items: flex-start; flex-direction: column; }
+  .seller-product-row button { margin-left: 0; }
+}
+
 @media (max-width: 680px) {
   .account-main .offers-section,
   .account-main .offer-form-container {

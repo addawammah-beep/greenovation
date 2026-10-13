@@ -1,0 +1,2 @@
+ALTER TABLE product_orders
+  ADD COLUMN IF NOT EXISTS points_deducted BOOLEAN NOT NULL DEFAULT TRUE;
