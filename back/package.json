@@ -1,0 +1,29 @@
+{
+  "name": "back",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "test": "node --test domain.test.js",
+    "start": "nodemon server.js",
+    "db:migrate": "node migrate.js",
+    "db:setup": "node [setup-database.js](http://_vscodecontentref_/1)",
+    "db:reset": "node [reset-database.js](http://_vscodecontentref_/2)"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google-cloud/vision": "^6.0.0",
+    "@google/genai": "^2.16.0",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "groq-sdk": "^1.5.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
+    "nodemon": "^3.1.11",
+    "pg": "^8.16.3"
+  }
+}

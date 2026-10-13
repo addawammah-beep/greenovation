@@ -1,0 +1,38 @@
+.footer-section {
+    padding: 20px 0;
+    background:#000000;
+  }
+  
+  .footer-section .section-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  
+  .footer-section :where(.copyright-text, .social-link, .Greenovation🌿) {
+    color: #ffffff;
+    transition: 0.2s ease;
+    text-decoration: none;
+  }
+  
+  .footer-section .social-link-list {
+    display: flex;
+    gap: 25px;
+  }
+  
+  .footer-section .social-link-list .social-link {
+    font-size: var (--font-size-l);
+  }
+  
+  .footer-section .social-link-list .social-link:hover,
+  .footer-section .policy-text .Greenovation🌿:hover {
+    color: #27ae60;
+  }
+  
+  .footer-section .policy-text .separator {
+    color: #fff;
+    margin: 0 5px;
+  }
+  
+  
+  

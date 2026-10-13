@@ -1,0 +1,240 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Poppins', sans-serif;
+}
+
+.our-services {
+  padding: 60px 0;
+  background-color: #f4f4f4;
+  text-align: center;
+}
+
+.section-title {
+  font-size: 2.5rem;
+  color: #333;
+  margin-bottom: 40px;
+  position: relative;
+  font-weight: bold;
+}
+
+.section-title::after {
+  content: "";
+  width: 50px;
+  height: 3px;
+  display: block;
+  margin: 10px auto 0;
+  background: #27ae60;
+  border-radius: 5px;
+}
+
+.testimonials-section {
+  padding: 20px;
+}
+
+.swiper-container {
+  padding: 20px 0;
+}
+
+.swiper-slide {
+  display: flex;
+  justify-content: center;
+  margin: 30px 0;
+}
+
+.card {
+  width: calc(18rem + 80px);
+  margin: 0 auto;
+  border-radius: 10px;
+  transition: all 0.3s ease-in-out;
+}
+
+.card-hover:hover {
+  background-color: #081c0d;
+  transform: scale(1.05);
+}
+
+.card-hover:hover .emoji {
+  color: #27ae60;
+}
+
+.card-hover:hover .description {
+  color: #ffffff;
+}
+
+.card-hover:hover .leaf-icon {
+  display: block;
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+.card img {
+  width: 100%;
+  height: auto;
+  border-radius: 10px 10px 0 0;
+}
+
+.card-body {
+  text-align: left;
+  position: relative;
+}
+
+.card-title {
+  font-size: 1rem;
+  font-weight: bold;
+  margin-bottom: 10px;
+}
+
+.card-text {
+  font-size: 1rem;
+  margin-bottom: 15px;
+  color: grey;
+}
+
+.bold-underline {
+  font-weight: bold;
+  position: relative;
+  display: inline-block;
+  margin-bottom: 9px;
+}
+
+.titleunderline {
+  height: 5px;
+  width: 100px;
+  background: #27ae60;
+  border-radius: 5px;
+  align-items: center;
+  margin-top: 40px;
+  margin-left: 780px;
+}
+
+.bold-underline::after {
+  content: "";
+  width: 50px;
+  height: 3px;
+  display: block;
+  background: #27ae60;
+  border-radius: 5px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -5px;
+  margin-bottom: 8px;
+}
+
+.underline {
+  height: 3px;
+  width: 50px;
+  background: #27ae60;
+  border-radius: 5px;
+  margin: 5px 0 8px;
+}
+
+.extra-content {
+  display: none;
+}
+
+.leaf-icon {
+  width: 15px;
+  height: 15px;
+  margin-bottom: 10px;
+}
+
+.small-icon {
+  width: 40px;
+  height: 40px;
+  margin: 10px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+button {
+  background-color: #27ae60;
+  border: none;
+  color: white;
+  padding: 10px 20px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin: 4px 2px;
+  cursor: pointer;
+  border-radius: 5px;
+}
+
+.mySwiper {
+  margin: 20px 0;
+}
+
+.card {
+  border-radius: 10px !important;
+}
+
+.card img {
+  border-radius: 10px 10px 0 0 !important;
+}
+
+.card-body {
+  text-align: left;
+}
+
+.append-buttons {
+  text-align: center;
+  margin-top: 20px;
+}
+
+.append-buttons button {
+  margin: 0 10px;
+  padding: 10px 20px;
+  background-color: #27ae60;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.append-buttons button:hover {
+  background-color: #174a38;
+}
+
+.our-services {
+  padding: 20px;
+  background-color: #f9f9f9;
+}
+
+.section-title {
+  text-align: center;
+  margin-bottom: 20px;
+  font-size: 2em;
+  font-weight: bold;
+}
+
+/* Responsive Media Queries - فقط لجعل التصميم responsive */
+
+/* Tablet (768px to 1199px) */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .titleunderline {
+    margin-left: calc(50% - 50px);
+  }
+}
+
+/* Mobile (up to 767px) */
+@media (max-width: 767px) {
+  .our-services {
+    padding: 20px 10px;
+  }
+  
+  .titleunderline {
+    margin-left: calc(50% - 50px);
+  }
+}

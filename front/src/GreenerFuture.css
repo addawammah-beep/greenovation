@@ -1,0 +1,371 @@
+:root {
+  --white-color: #FFFFFF;
+  --light-gray-color: #ffffff;
+  --dark-color: #000000;
+  --primary-color: #2c3e50;
+  --secondary-color: #4CAF50;
+  --secondary-dark: #80b71af2;
+  --medium-gray-color: #ccc;
+  --transparent-black: rgba(0, 0, 0, 0.3);
+  --transparent-white: rgba(255, 255, 255, 0.7);
+  --underline-green: #4CAF50;
+  
+  /* Font size */
+  --font-size-s: 0.9rem;
+  --font-size-n: 1rem;
+  --font-size-m: 1.12rem;
+  --font-size-l: 1.5rem;
+  --font-size-xl: 2rem;
+  --font-size-xxl: 2.3rem;
+  --font-size-xxxl: 3rem;
+  --font-size-xxxxl: 4rem;
+
+  /* Font weight */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
+}
+
+body {
+  font-family: 'Poppins', sans-serif;
+  background-color: #ffffff;
+  color: #1a1a1a;
+}
+
+.greener-future-section {
+  max-width: 1300px;
+  margin: auto;
+  padding: 0 20px;
+}
+
+.section-content {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.details {
+  flex: 2;
+  min-width: 300px;
+  padding-right: 20px;
+}
+
+.image-wrapper {
+  flex: 1;
+  min-width: 300px;
+  display: flex;
+  justify-content: center;
+  position: relative;
+}
+
+.main-image {
+  margin-top: 67px;
+  width: 100%;
+  max-width: 660px;
+  height: auto;
+}
+
+.animated-icon {
+  position: absolute;
+  top: 70px;
+  left: 40px;
+  width: 230px;
+  height: auto;
+  animation: shake 0.5s infinite alternate;
+}
+
+@keyframes shake {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(10px); }
+}
+
+.section-title {
+  font-size: var(--font-size-xxxl);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: 10px;
+  position: relative;
+  display: inline-block;
+  padding-bottom: 10px;
+  line-height: 1.2;
+}
+
+.section-title::after {
+  content: "";
+  display: block;
+  width: 100px;
+  height: 4px;
+  background-color: var(--underline-green);
+  margin-top: 5px;
+}
+
+.text-muted {
+  font-size: 1.2rem;
+  color: #7a7a7a;
+  line-height: 1.6;
+  margin-bottom: 30px;
+}
+
+.buttons {
+  display: flex;
+  gap: 15px;
+  margin: 30px 0;
+  flex-wrap: wrap;
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 20px;
+  border-radius: 10px;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-m);
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background-color: var(--white-color);
+  color: var(--dark-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  min-width: 180px;
+}
+
+.button-icon {
+  width: 50px; 
+  height: 50px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: #f0f0f0;
+  padding: 5px;
+}
+
+.button:hover {
+  background-color: var(--secondary-color);
+  color: var(--white-color);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+}
+
+.button.green {
+  background-color: var(--secondary-color);
+  color: var(--white-color);
+}
+
+.button.green:hover {
+  background-color: #45a049;
+}
+
+.progress-container {
+  margin-top: 30px;
+}
+
+.progress-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 25px;
+}
+
+.progress-item .fw-bold {
+  margin-bottom: 8px;
+  font-size: var(--font-size-m);
+  font-weight: var(--font-weight-bold);
+}
+
+.progress-percentage {
+  font-weight: var(--font-weight-bold);
+  margin-bottom: 8px;
+  align-self: flex-end;
+  color: var(--secondary-color);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 12px;
+  background: #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.progress {
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50, #45a049);
+  border-radius: 6px;
+  transition: width 0.3s ease;
+}
+
+@media (max-width: 1024px) {
+  .greener-future-section {
+    padding: 0 15px;
+  }
+  
+  .section-content {
+    gap: 30px;
+  }
+  
+  .details {
+    padding-right: 10px;
+  }
+  
+  .section-title {
+    font-size: var(--font-size-xxl);
+  }
+  
+  .text-muted {
+    font-size: 1.1rem;
+  }
+  
+  .main-image {
+    max-width: 500px;
+  }
+  
+  .animated-icon {
+    width: 180px;
+    left: 30px;
+  }
+}
+
+@media (max-width: 768px) {
+  .greener-future-section {
+    padding: 0 10px;
+  }
+  
+  .section-content {
+    flex-direction: column;
+    gap: 20px;
+    text-align: center;
+  }
+  
+  .details {
+    padding-right: 0;
+    order: 2;
+  }
+  
+  .image-wrapper {
+    order: 1;
+    min-width: auto;
+  }
+  
+  .section-title {
+    font-size: var(--font-size-xl);
+    text-align: center;
+  }
+  
+  .section-title::after {
+    margin: 10px auto 0;
+  }
+  
+  .text-muted {
+    font-size: 1rem;
+    text-align: center;
+  }
+  
+  .buttons {
+    justify-content: center;
+    gap: 10px;
+  }
+  
+  .button {
+    min-width: 160px;
+    padding: 12px 16px;
+    font-size: var(--font-size-n);
+  }
+  
+  .button-icon {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .main-image {
+    max-width: 400px;
+    margin-top: 20px;
+  }
+  
+  .animated-icon {
+    width: 120px;
+    left: 20px;
+    top: 30px;
+  }
+  
+  .progress-percentage {
+    align-self: center;
+    margin-bottom: 5px;
+  }
+}
+
+@media (max-width: 480px) {
+  .greener-future-section {
+    padding: 0 5px;
+  }
+  
+  .section-title {
+    font-size: var(--font-size-l);
+  }
+  
+  .text-muted {
+    font-size: 0.9rem;
+  }
+  
+  .buttons {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .button {
+    width: 100%;
+    max-width: 250px;
+    justify-content: center;
+  }
+  
+  .button-icon {
+    width: 35px;
+    height: 35px;
+  }
+  
+  .main-image {
+    max-width: 300px;
+  }
+  
+  .animated-icon {
+    width: 100px;
+    left: 15px;
+    top: 25px;
+  }
+  
+  .progress-item .fw-bold {
+    font-size: var(--font-size-n);
+  }
+  
+  .progress-bar {
+    height: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .section-title {
+    font-size: 1.3rem;
+  }
+  
+  .button {
+    padding: 10px 12px;
+    font-size: 0.9rem;
+  }
+  
+  .button-icon {
+    width: 30px;
+    height: 30px;
+  }
+  
+  .main-image {
+    max-width: 250px;
+  }
+  
+  .animated-icon {
+    width: 80px;
+    left: 10px;
+    top: 20px;
+  }
+}

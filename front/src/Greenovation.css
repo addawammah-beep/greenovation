@@ -1,0 +1,111 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap');
+
+* {
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+  font-family: "Montserrat", sans-serif;
+}
+
+:root {  --white-color: #FFFFFF;
+  --light-gray-color: #DADADA;
+  --dark-color: #000000;
+  /* --primary-color: #2c3e50;  */
+  --secondary-color: #27ae60; 
+  --secondary-dark: #1e824c;
+  --medium-gray-color: #ffffff;
+  --transparent-black: rgba(0, 0, 0, 0.3); 
+  --transparent-white: rgba(255, 255, 255, 0.7);
+  --light-green-color: #ffffff; 
+
+  /* Font size */
+  --font-size-s: 0.9rem;
+  --font-size-n: 1rem;
+  --font-size-m: 1.12rem;
+  --font-size-l: 1.5rem;
+  --font-size-xl: 2rem;
+  --font-size-xxl: 2.3rem;
+  --font-size-xxxl: 3rem;
+  --font-size-xxxxl: 4rem;
+
+  /* Font weight */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
+
+  /* Border radius */
+  --border-radius-s: 8px;
+  --border-radius-m: 30px;
+  --border-radius-circle: 50%;
+
+  /* Site max width */
+  --site-max-width: 1300px;
+}
+
+img {
+  width: 100%;
+}
+
+:where(section, footer) .section-content {
+  padding: 0 20px;
+  max-width: var(--site-max-width);
+}
+
+section .section-title {
+  text-align: left;
+  padding: 60px 0 100px;
+  text-transform: uppercase;
+  font-size: var(--font-size-xl);
+}
+
+section .section-title::after {
+  content: "";
+  width: 80px;
+  height: 5px;
+  display: block;
+  margin: 10px 0 0;
+  background: var(--secondary-color);
+  border-radius: var(--border-radius-s);
+}
+
+/* 
+.menu-section {
+  color: var (--white-color);
+  background: var (--dark-color);
+  padding: 50px 0 100px;
+}
+
+.menu-section .menu-list {
+  display: flex;
+  gap: 110px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.menu-section .menu-list .menu-item {
+  display: flex;
+  text-align: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% / 3 - 110px);
+}
+
+.menu-section .menu-list .menu-item .menu-image {
+  width: 83%;
+  aspect-ratio: 1;
+  margin-bottom: 15px;
+}
+
+.menu-section .menu-list .menu-item .name {
+  margin: 12px 0;
+  font-size: var (--font-size-l);
+  font-weight: var (--font-weight-semibold);
+}
+
+.menu-section .menu-list .menu-item .text {
+  font-size: var (--font-size-m);
+} */
+

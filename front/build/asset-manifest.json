@@ -1,0 +1,23 @@
+{
+  "files": {
+    "main.css": "/static/css/main.a434988c.css",
+    "main.js": "/static/js/main.09f37c95.js",
+    "static/media/hero-greenovation.mp4": "/static/media/hero-greenovation.4770112f219de4a97d41.mp4",
+    "static/media/Mpicture1.png": "/static/media/Mpicture1.6297f31917b02031b535.png",
+    "static/media/Mpicture2.png": "/static/media/Mpicture2.369cfa0e2f8d1168be8a.png",
+    "static/media/download.png": "/static/media/download.9b5baf8e005f2aaa0e32.png",
+    "static/media/chatpot_image.png": "/static/media/chatpot_image.604f24d348e959f35951.png",
+    "static/media/aboutimg.jpg": "/static/media/aboutimg.644c28e9d9a1821d9df8.jpg",
+    "static/media/downloading2.png": "/static/media/downloading2.5a6073dfb66ad3431fb4.png",
+    "static/media/heaaderimg.png": "/static/media/heaaderimg.e81d34801d09b3915809.png",
+    "static/media/correct.mp3": "/static/media/correct.cdb52bba6ad05029317f.mp3",
+    "static/media/incorrect.mp3": "/static/media/incorrect.cd5d2b08d1e2ba5420c2.mp3",
+    "index.html": "/index.html",
+    "main.a434988c.css.map": "/static/css/main.a434988c.css.map",
+    "main.09f37c95.js.map": "/static/js/main.09f37c95.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.a434988c.css",
+    "static/js/main.09f37c95.js"
+  ]
+}

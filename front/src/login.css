@@ -1,0 +1,162 @@
+.popup-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+  animation: fadeIn 0.3s ease;
+}
+
+.popup-content {
+  background: white;
+  border-radius: 15px;
+  padding: 30px;
+  max-width: 450px;
+  width: 90%;
+  position: relative;
+  animation: popIn 0.3s ease;
+  text-align: center;
+  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s;
+}
+
+.popup-close {
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  font-size: 24px;
+  color: #6c6b6b;
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.popup-close:hover {
+  color: #333;
+}
+
+.choose-account {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+.choose-account h3 {
+  margin-bottom: 10px;
+}
+.choose-account .button {
+  padding: 10px 0;
+  width: 150px;
+  text-align: center;
+  border-radius: 8px;
+  background: #73b706;
+  color: #fff;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s;
+  display: block;
+}
+.choose-account .button:hover {
+  background: #73b706;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.input {
+  margin: 7px 0;
+  padding: 10px 12px;
+  width: 100%;
+  max-width: 300px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 1rem;
+  transition: all 0.3s;
+}
+.input:focus {
+  border-color: #27ae60;
+  box-shadow: 0 0 8px rgba(28, 164, 122, 0.3);
+  outline: none;
+}
+
+.button {
+  margin-top: 15px;
+  padding: 10px 0;
+  width: 100%;
+  max-width: 300px;
+  background: #27ae60;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  text-align: center;
+  display: block;
+  transition: all 0.3s;
+}
+.button:hover {
+  background: #27ae60;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.tab-switch {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+  gap: 10px;
+}
+.tab {
+  padding: 8px 16px;
+  background: #92a38d;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.tab.active {
+  background: #73b706;
+  color: #fff;
+}
+
+.error-message {
+  color: red;
+  margin-top: 10px;
+  font-size: 0.95rem;
+  font-weight: bold;
+  text-align: center;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.8) translateY(-20px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@media (max-width: 768px) {
+  .input, .button {
+    width: 90%;
+  }
+  .tab-switch {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .popup-content {
+    padding: 25px 20px;
+  }
+  .choose-account {
+    flex-direction: column;
+  }
+}
