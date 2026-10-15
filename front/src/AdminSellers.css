@@ -91,6 +91,146 @@
   margin-bottom: 18px;
 }
 
+.admin-seller-list-heading > div > p {
+  margin: 7px 0 0;
+  color: #56656c;
+}
+
+.admin-tax-points-list {
+  margin-bottom: 20px;
+}
+
+.admin-tax-points-card {
+  display: grid;
+  gap: 10px;
+  padding: 18px 0;
+  border-top: 1px solid #e0e4e6;
+}
+
+.admin-report-card {
+  padding: 18px 0;
+  border-top: 1px solid #e0e4e6;
+}
+
+.admin-report-image {
+  display: grid;
+  min-height: 48px;
+  place-items: center;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  background: #f5f7f6;
+}
+
+.admin-report-image img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.admin-report-image > p {
+  margin: 12px;
+  color: #66747b;
+}
+
+.admin-report-image > .admin-report-image-error {
+  color: #8b241c;
+}
+
+.admin-report-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 20px;
+}
+
+.admin-report-card h3 {
+  margin: 6px 0;
+  color: #203a30;
+}
+
+.admin-report-card h3 small {
+  color: #66747b;
+}
+
+.admin-report-card p {
+  margin: 8px 0;
+  color: #56656c;
+  line-height: 1.5;
+}
+
+.admin-report-heading .admin-seller-status {
+  color: #8a6500;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.admin-report-heading .admin-report-result {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 4px;
+  background: #f2f4f3;
+  color: #56656c;
+  font-weight: 700;
+}
+
+.admin-report-heading .admin-report-result.detected {
+  background: #edf7ef;
+  color: #174a38;
+}
+
+.admin-tax-points-card h3,
+.admin-tax-points-card p {
+  margin: 6px 0;
+}
+
+.admin-tax-points-card h3 {
+  color: #203a30;
+}
+
+.admin-tax-points-card h3 small {
+  color: #66747b;
+}
+
+.admin-tax-points-card p {
+  color: #56656c;
+}
+
+.admin-tax-points-card details summary {
+  color: #174a38;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.admin-tax-points-card ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 22px;
+  color: #56656c;
+}
+
+.admin-tax-points-card > button {
+  justify-self: start;
+  min-height: 40px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 4px;
+  background: #174a38;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.admin-tax-points-note {
+  margin-bottom: 0;
+  color: #6d7a81;
+  font-size: 0.9rem;
+}
+
 .admin-seller-card {
   display: flex;
   justify-content: space-between;

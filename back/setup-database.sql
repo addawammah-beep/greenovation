@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS reports (
 
     description TEXT NOT NULL,
 
-    image VARCHAR(255) NOT NULL,
+    image VARCHAR(255),
 
     latitude DOUBLE PRECISION NOT NULL,
 
@@ -186,9 +186,17 @@ CREATE TABLE IF NOT EXISTS reports (
 
     ai_valid BOOLEAN DEFAULT FALSE,
 
+    ai_contains_trash BOOLEAN NOT NULL DEFAULT FALSE,
+
     ai_confidence INTEGER DEFAULT 0,
 
     ai_reason TEXT,
+
+    captured_at TIMESTAMPTZ,
+
+    capture_accuracy_m DOUBLE PRECISION,
+
+    capture_method VARCHAR(20),
 
     status VARCHAR(30) DEFAULT 'pending',
 

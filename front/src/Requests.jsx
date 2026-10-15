@@ -1649,12 +1649,7 @@ const Requests = () => {
                           </p>
                         )}
 
-                      <p>
-                        Points are managed by
-                        the Greenovation
-                        backend and can be used
-                        for eligible rewards.
-                      </p>
+                      <p>Points are managed by the Greenovation backend and remain in your account balance.</p>
                     </div>
                   )}
                 </div>

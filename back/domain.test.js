@@ -52,9 +52,3 @@ test('reconciliation flags only configured variance', () => {
   assert.equal(result.difference, 0.1999999999999993);
   assert.equal(result.flagged, true);
 });
-
-test('coupon lookup is separate from merchant redemption permission', () => {
-  assert.equal(hasPermission('merchant', 'coupon:lookup'), true);
-  assert.equal(hasPermission('merchant', 'coupon:redeem'), true);
-  assert.equal(hasPermission('user', 'coupon:redeem'), false);
-});

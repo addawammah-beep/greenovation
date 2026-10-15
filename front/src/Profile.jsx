@@ -44,10 +44,10 @@ function Profile({ setUser }) {
   const [confirmingRequestId, setConfirmingRequestId] = useState(null);
   const [requestActionError, setRequestActionError] = useState('');
   const [requestCreateError, setRequestCreateError] = useState('');
-  const [coupons, setCoupons] = useState([]);
   const [products, setProducts] = useState([]);
   const [sellerProducts, setSellerProducts] = useState([]);
   const [productOrders, setProductOrders] = useState([]);
+  const [sellerTaxPoints, setSellerTaxPoints] = useState(null);
   const [productOrderSyncError, setProductOrderSyncError] = useState('');
   const [redeemingProductId, setRedeemingProductId] = useState(null);
   const [updatingProductOrderId, setUpdatingProductOrderId] = useState(null);
@@ -83,18 +83,6 @@ function Profile({ setUser }) {
           setRequests(data);
         }
         const token = localStorage.getItem('greenovation_token');
-        const couponsResponse = await fetch('http://localhost:4000/api/v2/user/coupons', {
-          headers: { Authorization: `Bearer ${token || ''}` }
-        });
-        if (couponsResponse.ok) {
-          const couponData = await couponsResponse.json();
-          setCoupons(couponData.coupons || []);
-          if (couponData.points !== undefined) {
-            const updatedUser = { ...user, points: Number(couponData.points) };
-            setUserData(updatedUser);
-            localStorage.setItem('greenovation_user', JSON.stringify(updatedUser));
-          }
-        }
         const headers = { Authorization: `Bearer ${token || ''}` };
         const [productsResponse, ordersResponse] = await Promise.all([
           fetch('http://localhost:4000/api/v2/products', { headers }),
@@ -134,6 +122,12 @@ function Profile({ setUser }) {
         const ordersData = await ordersResponse.json();
         if (!ordersResponse.ok) throw new Error(ordersData.error || 'Failed to load seller product orders');
         setProductOrders(ordersData.orders || []);
+        const taxPointsResponse = await fetch('http://localhost:4000/api/v2/seller/tax-points', {
+          headers: { Authorization: `Bearer ${token || ''}` }
+        });
+        const taxPointsData = await taxPointsResponse.json();
+        if (!taxPointsResponse.ok) throw new Error(taxPointsData.error || 'Failed to load seller tax points');
+        setSellerTaxPoints(taxPointsData.tax_points);
       }
       setLoading(false);
     } catch (error) {
@@ -153,14 +147,18 @@ function Profile({ setUser }) {
       refreshing = true;
       try {
         const token = localStorage.getItem('greenovation_token');
-        const response = await fetch('http://localhost:4000/api/v2/user/product-orders', {
-          headers: { Authorization: `Bearer ${token || ''}` }
-        });
-        const data = await response.json();
+        const headers = { Authorization: `Bearer ${token || ''}` };
+        const [response, productsResponse] = await Promise.all([
+          fetch('http://localhost:4000/api/v2/user/product-orders', { headers }),
+          fetch('http://localhost:4000/api/v2/products', { headers })
+        ]);
+        const [data, productsData] = await Promise.all([response.json(), productsResponse.json()]);
         if (!response.ok) throw new Error(data.error || 'Failed to refresh product orders');
+        if (!productsResponse.ok) throw new Error(productsData.error || 'Failed to refresh products');
         if (!active) return;
 
         setProductOrders(data.orders || []);
+        setProducts(productsData.products || []);
         if (data.points !== undefined) {
           const points = Number(data.points);
           setUserData(current => {
@@ -189,6 +187,53 @@ function Profile({ setUser }) {
     };
   }, [userType, userData?.id]);
 
+  useEffect(() => {
+    if (userType !== 'seller' || !userData?.id) return undefined;
+
+    let active = true;
+    let refreshing = false;
+    const refreshSellerOrders = async () => {
+      if (refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      try {
+        const token = localStorage.getItem('greenovation_token');
+        const headers = { Authorization: `Bearer ${token || ''}` };
+        const [productsResponse, response, taxPointsResponse] = await Promise.all([
+          fetch('http://localhost:4000/api/v2/seller/products', { headers }),
+          fetch('http://localhost:4000/api/v2/seller/product-orders', { headers }),
+          fetch('http://localhost:4000/api/v2/seller/tax-points', { headers })
+        ]);
+        const [productsData, data, taxPointsData] = await Promise.all([
+          productsResponse.json(),
+          response.json(),
+          taxPointsResponse.json()
+        ]);
+        if (!productsResponse.ok) throw new Error(productsData.error || 'Failed to refresh seller products');
+        if (!response.ok) throw new Error(data.error || 'Failed to refresh seller orders');
+        if (!taxPointsResponse.ok) throw new Error(taxPointsData.error || 'Failed to refresh seller tax points');
+        if (active) {
+          setSellerProducts(productsData.products || []);
+          setProductOrders(data.orders || []);
+          setSellerTaxPoints(taxPointsData.tax_points);
+        }
+      } catch (error) {
+        if (active) setRequestActionError(error.message || 'Failed to refresh seller orders');
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const intervalId = setInterval(refreshSellerOrders, 10000);
+    window.addEventListener('focus', refreshSellerOrders);
+    document.addEventListener('visibilitychange', refreshSellerOrders);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+      window.removeEventListener('focus', refreshSellerOrders);
+      document.removeEventListener('visibilitychange', refreshSellerOrders);
+    };
+  }, [userType, userData?.id]);
+
   const handleRedeemProduct = async (product) => {
     try {
       setRedeemingProductId(product.id);
@@ -211,6 +256,38 @@ function Profile({ setUser }) {
       setRequestActionError(error.message || 'Unable to redeem product');
     } finally {
       setRedeemingProductId(null);
+    }
+  };
+
+  const handleCancelProductOrder = async (order) => {
+    try {
+      setUpdatingProductOrderId(order.id);
+      setProductOrderSyncError('');
+      const token = localStorage.getItem('greenovation_token');
+      const response = await fetch(`http://localhost:4000/api/v2/user/product-orders/${order.id}/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token || ''}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to cancel product order');
+      setProductOrders(current => current.map(item => String(item.id) === String(order.id)
+        ? { ...item, ...data.order }
+        : item));
+      if (data.points !== undefined) {
+        const updatedUser = { ...userData, points: Number(data.points) };
+        setUserData(updatedUser);
+        localStorage.setItem('greenovation_user', JSON.stringify(updatedUser));
+      }
+      const productsResponse = await fetch('http://localhost:4000/api/v2/products', {
+        headers: { Authorization: `Bearer ${token || ''}` }
+      });
+      const productsData = await productsResponse.json();
+      if (!productsResponse.ok) throw new Error(productsData.error || 'Order cancelled, but the product catalog could not be refreshed');
+      setProducts(productsData.products || []);
+    } catch (error) {
+      setProductOrderSyncError(error.message || 'Failed to cancel product order');
+    } finally {
+      setUpdatingProductOrderId(null);
     }
   };
 
@@ -265,23 +342,6 @@ function Profile({ setUser }) {
   const openRequests = requests.filter(request => (
     String(request.status).toLowerCase() !== 'completed' && !assignedRequests.some(assigned => assigned.id === request.id)
   ));
-  const activeCoupons = coupons.filter(coupon => coupon.coupon_group === 'active');
-  const inactiveCoupons = coupons.filter(coupon => coupon.coupon_group === 'inactive');
-
-  const renderCoupon = (coupon) => (
-    <article key={coupon.id} className="coupon-card">
-      <div className="coupon-card-header">
-        <strong>{coupon.code || coupon.public_reference}</strong>
-        <span>{coupon.status === 'REDEEMED' ? 'Used' : 'Expired'}</span>
-      </div>
-      <p><b>Reward:</b> {coupon.reward_value ?? coupon.points_earned ?? 0} points</p>
-      {coupon.final_weight && <p><b>Final weight:</b> {coupon.final_weight} kg</p>}
-      <p><b>Created:</b> {new Date(coupon.created_at).toLocaleString()}</p>
-      {coupon.redeemed_at && <p><b>Used:</b> {new Date(coupon.redeemed_at).toLocaleString()}{coupon.redeemed_by_name ? ` by ${coupon.redeemed_by_name}` : ''}</p>}
-      {!coupon.redeemed_at && coupon.expires_at && <p><b>Expires:</b> {new Date(coupon.expires_at).toLocaleString()}</p>}
-    </article>
-  );
-
   const renderRequestCard = (request, showCompletionDetails = false) => (
     <article key={request.id} className="profile-request-card">
       <div className="profile-request-card-header">
@@ -466,15 +526,8 @@ function Profile({ setUser }) {
               <div className="user-request-section-heading"><p className="dashboard-label">HISTORY</p><h2>Completed Requests</h2><p>Requests collected and completed successfully.</p></div>
               <div className="profile-request-grid">{completedRequests.length ? completedRequests.map(request => renderRequestCard(request, true)) : <p className="profile-empty-state">No completed requests yet.</p>}</div>
             </section>
-            <section className="user-request-section coupons-section">
-              <div className="user-request-section-heading"><p className="dashboard-label">REWARDS</p><h2>My Coupons</h2><p>Use an active coupon at a participating seller.</p></div>
-              <div className="coupon-columns">
-                <div><h3>Active Coupons</h3><div className="coupon-grid">{activeCoupons.length ? activeCoupons.map(renderCoupon) : <p className="profile-empty-state">No active coupons.</p>}</div></div>
-                <div><h3>Used / Expired Coupons</h3><div className="coupon-grid">{inactiveCoupons.length ? inactiveCoupons.map(renderCoupon) : <p className="profile-empty-state">No used or expired coupons.</p>}</div></div>
-              </div>
-            </section>
             <section className="user-request-section product-catalog-section">
-              <div className="user-request-section-heading"><p className="dashboard-label">POINTS SHOP</p><h2>Available Products</h2><p>Choose an in-stock product to request it from the seller. Points are deducted only after the seller confirms your order.</p></div>
+              <div className="user-request-section-heading"><p className="dashboard-label">POINTS SHOP</p><h2>Available Products</h2><p>Request an in-stock product. Points are reserved immediately and returned if the order is cancelled, rejected, or not confirmed within 24 hours. Confirmed orders are picked up from the seller; delivery is not provided.</p></div>
               {products.length ? (
                 <div className="product-catalog-grid">
                   {products.map(product => (
@@ -504,9 +557,28 @@ function Profile({ setUser }) {
                     <span>{order.points_cost} points</span>
                     <span>Seller: {order.seller_name || 'Seller'}</span>
                     <span className={`product-order-status ${order.status}`}>
-                      {order.status === 'pending' ? 'Awaiting seller confirmation · points not deducted' : order.status === 'approved' ? 'Confirmed · points deducted' : order.status === 'fulfilled' ? 'Picked up' : 'Rejected'}
+                      {order.status === 'pending'
+                        ? `Awaiting seller confirmation · ${order.points_deducted ? 'points reserved' : 'points due on confirmation'} · deadline ${new Date(order.expires_at).toLocaleString()}`
+                        : order.status === 'approved'
+                          ? 'Confirmed · ready for pickup · points deducted'
+                          : order.status === 'fulfilled'
+                            ? 'Picked up'
+                            : order.status === 'cancelled'
+                              ? 'Cancelled · any reserved points returned'
+                              : order.status === 'expired'
+                                ? 'Expired · any reserved points returned'
+                                : 'Rejected · any reserved points returned'}
                     </span>
                     <small>{new Date(order.created_at).toLocaleString()}</small>
+                    {order.status === 'pending' && (
+                      <button
+                        type="button"
+                        disabled={updatingProductOrderId === order.id}
+                        onClick={() => handleCancelProductOrder(order)}
+                      >
+                        {updatingProductOrderId === order.id ? 'Cancelling...' : 'Cancel order'}
+                      </button>
+                    )}
                   </article>
                 )) : <p className="profile-empty-state">No product orders yet.</p>}
               </div>
@@ -564,9 +636,15 @@ function Profile({ setUser }) {
               <div className="user-request-section-heading">
                 <p className="dashboard-label">SELLER OFFERS</p>
                 <h2>My Offers and Pickup Orders</h2>
-                <p>Manage your products and confirm customer orders from here.</p>
+                <p>Manage products and customer orders. Customers collect confirmed orders from your store.</p>
               </div>
               {requestActionError && <p className="profile-request-action-error" role="alert">{requestActionError}</p>}
+              <section className="seller-tax-points" aria-labelledby="seller-tax-points-title">
+                <h3 id="seller-tax-points-title">Tax deduction points</h3>
+                <p>Points from completed customer pickups awaiting admin verification: <strong>{Number(sellerTaxPoints?.eligible_points || 0).toLocaleString()}</strong> ({sellerTaxPoints?.eligible_orders || 0} orders)</p>
+                <p>Points verified by admin for tax deduction: <strong>{Number(sellerTaxPoints?.verified_points || 0).toLocaleString()}</strong> ({sellerTaxPoints?.verified_orders || 0} orders)</p>
+                <small>Only orders marked picked up are included. Admin verification records points; tax-value conversion is not calculated here.</small>
+              </section>
               <div className="seller-profile-orders">
                 <h3>Customer pickup orders</h3>
                 {loading ? <p>Loading your orders...</p> : productOrders.length ? productOrders.map(order => (
@@ -575,7 +653,19 @@ function Profile({ setUser }) {
                       <strong>{order.product_name}</strong>
                       <p>{order.points_cost} points · {order.user_name} ({order.user_email})</p>
                     </div>
-                    <span className={`product-order-status ${order.status}`}>{order.status}</span>
+                    <span className={`product-order-status ${order.status}`}>
+                      {order.status === 'pending'
+                        ? `Awaiting confirmation · ${new Date(order.expires_at).toLocaleString()} deadline`
+                        : order.status === 'approved'
+                          ? 'Confirmed · awaiting customer pickup'
+                          : order.status === 'fulfilled'
+                            ? 'Picked up'
+                            : order.status === 'cancelled'
+                              ? 'Cancelled by customer'
+                              : order.status === 'expired'
+                                ? 'Expired · stock released'
+                                : 'Rejected · stock released'}
+                    </span>
                     {order.status === 'pending' && (
                       <div className="seller-profile-order-actions">
                         <button
@@ -583,7 +673,7 @@ function Profile({ setUser }) {
                           disabled={updatingProductOrderId === order.id}
                           onClick={() => handleSellerProductOrderUpdate(order, 'approved')}
                         >
-                          {updatingProductOrderId === order.id ? 'Updating...' : 'Confirm order and deduct points'}
+                          {updatingProductOrderId === order.id ? 'Updating...' : 'Confirm and prepare for pickup'}
                         </button>
                         <button
                           type="button"
@@ -600,7 +690,7 @@ function Profile({ setUser }) {
                         disabled={updatingProductOrderId === order.id}
                         onClick={() => handleSellerProductOrderUpdate(order, 'fulfilled')}
                       >
-                        Mark picked up
+                        Confirm customer pickup
                       </button>
                     )}
                   </article>

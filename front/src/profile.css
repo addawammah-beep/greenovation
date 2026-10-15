@@ -74,48 +74,6 @@
   gap: 10px;
 }
 
-.coupon-columns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px;
-}
-
-.coupon-columns h3 {
-  color: #2c3e50;
-  margin: 0 0 12px;
-}
-
-.coupon-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.coupon-card {
-  background: #f8f9fa;
-  border: 1px solid #dfe7e2;
-  border-left: 4px solid #27ae60;
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.coupon-card-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: #174a38;
-}
-
-.coupon-card-header span {
-  color: #27ae60;
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-
-.coupon-card p {
-  margin: 8px 0 0;
-  color: #495057;
-}
-
 .requests-section h3::before {
   content: "📋";
 }
@@ -271,9 +229,6 @@
     padding: 15px;
   }
 
-  .coupon-columns {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 480px) {
@@ -784,8 +739,7 @@
   background: #f2f7f3;
 }
 
-.points-balance-row span,
-.seller-reward-stats span {
+.points-balance-row span {
   color: #66747b;
   font-size: 0.85rem;
 }
@@ -793,72 +747,6 @@
 .points-balance-row strong {
   color: #174a38;
   font-size: 1.6rem;
-}
-
-.available-rewards {
-  margin: 0 0 28px;
-}
-
-.available-rewards h3 {
-  margin: 0 0 14px;
-  color: #172832;
-  font-family: Georgia, 'Times New Roman', serif;
-}
-
-.reward-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.reward-card {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  padding: 17px;
-  border: 1px solid #dfe4e6;
-  border-top: 3px solid #27ae60;
-  background: #ffffff;
-}
-
-.reward-card h4,
-.reward-card p {
-  margin: 0;
-}
-
-.reward-card h4 { color: #174a38; }
-.reward-card p { color: #66747b; }
-.reward-card p strong { color: #263238; }
-
-.reward-card button {
-  min-height: 42px;
-  margin-top: 4px;
-  border: 0;
-  border-radius: 2px;
-  background: #174a38;
-  color: #ffffff;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-}
-
-.reward-card button:disabled {
-  background: #9aa5a0;
-  cursor: not-allowed;
-}
-
-.reward-feedback {
-  margin: 0 0 16px;
-  padding: 12px 14px;
-  border-left: 3px solid #27ae60;
-  background: #f2f7f3;
-  color: #174a38;
-}
-
-.reward-feedback.error {
-  border-left-color: #c0392b;
-  background: #fff1f0;
-  color: #8b241c;
 }
 
 @media (max-width: 680px) {
@@ -955,11 +843,59 @@
 }
 
 .product-order-status.pending { background: #fff4d5; color: #785800; }
+.product-order-status.approved { background: #e8f4ec; color: #174a38; }
 .product-order-status.rejected { background: #fff1f0; color: #8b241c; }
+.product-order-status.cancelled { background: #edf0f2; color: #495057; }
+.product-order-status.expired { background: #fff1f0; color: #8b241c; }
 .product-order-status.fulfilled { background: #e8f4ec; color: #174a38; }
+
+.product-order-row button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 3px;
+  background: #174a38;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.product-order-row button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 
 .seller-profile-orders {
   margin: 20px 0 28px;
+}
+
+.seller-tax-points {
+  margin: 18px 0;
+  padding: 16px 18px;
+  border: 1px solid #cddfd2;
+  border-radius: 8px;
+  background: #f3f8f4;
+  color: #344b3e;
+}
+
+.seller-tax-points h3 {
+  margin: 0 0 10px;
+  color: #174a38;
+}
+
+.seller-tax-points p {
+  margin: 6px 0;
+}
+
+.seller-tax-points strong {
+  color: #174a38;
+}
+
+.seller-tax-points small {
+  display: block;
+  margin-top: 8px;
+  color: #5c6d63;
 }
 
 .seller-profile-orders h3,

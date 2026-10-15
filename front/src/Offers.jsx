@@ -8,24 +8,10 @@ const Offers = ({ setUser }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [userData, setUserData] = useState(null);
-  const [userType, setUserType] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [couponCode, setCouponCode] = useState('');
-  const [couponResult, setCouponResult] = useState(null);
-  const [couponLoading, setCouponLoading] = useState(false);
-  const [couponEmail, setCouponEmail] = useState('');
-  const [emailCoupons, setEmailCoupons] = useState(null);
-  const [emailCouponError, setEmailCouponError] = useState('');
-  const [emailCouponLoading, setEmailCouponLoading] = useState(false);
-  const [redeemingCouponId, setRedeemingCouponId] = useState(null);
-  const [sellerRewards, setSellerRewards] = useState([]);
-  const [sellerPoints, setSellerPoints] = useState(0);
-  const [totalCodesIssued, setTotalCodesIssued] = useState(0);
-  const [rewardSaving, setRewardSaving] = useState(false);
-  const [rewardError, setRewardError] = useState('');
-  const [rewardForm, setRewardForm] = useState({ name: '', points_cost: '', value_amount: '', currency: 'EGP' });
   const [sellerProducts, setSellerProducts] = useState([]);
   const [productOrders, setProductOrders] = useState([]);
+  const [sellerTaxPoints, setSellerTaxPoints] = useState(null);
   const [productForm, setProductForm] = useState({ name: '', description: '', points_cost: '', stock: '' });
   const [productSaving, setProductSaving] = useState(false);
   const [marketplaceError, setMarketplaceError] = useState('');
@@ -60,15 +46,17 @@ const Offers = ({ setUser }) => {
     }
     
     setUserData(storedUser);
-    setUserType(storedUserType);
     
     if (storedUser) {
       fetchOffers(storedUser.id);
-      fetchSellerRewards(storedUser.id);
       fetchSellerMarketplace();
+      const refreshTimer = setInterval(() => {
+        if (document.visibilityState === 'visible') fetchSellerMarketplace();
+      }, 10000);
       if (storedUser.gps) {
         setForm(prev => ({ ...prev, gps: storedUser.gps }));
       }
+      return () => clearInterval(refreshTimer);
     }
   }, [navigate]);
 
@@ -95,7 +83,6 @@ const Offers = ({ setUser }) => {
   const refreshSellerData = async () => {
     await Promise.all([
       fetchOffers(userData.id),
-      fetchSellerRewards(userData.id),
       fetchSellerMarketplace()
     ]);
   };
@@ -108,36 +95,25 @@ const Offers = ({ setUser }) => {
     navigate('/');
   };
 
-  const fetchSellerRewards = async (sellerId) => {
-    try {
-      const response = await fetch('http://localhost:4000/api/v2/merchant/rewards', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}` }
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to load discount rewards');
-      setSellerRewards(data.rewards || []);
-      setSellerPoints(data.seller?.points || 0);
-      setTotalCodesIssued(data.total_codes_issued || 0);
-    } catch (loadError) {
-      setRewardError(loadError.message || 'Failed to load discount rewards');
-    }
-  };
-
   const fetchSellerMarketplace = async () => {
     try {
       const headers = { Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}` };
-      const [productsResponse, ordersResponse] = await Promise.all([
+      const [productsResponse, ordersResponse, taxPointsResponse] = await Promise.all([
         fetch('http://localhost:4000/api/v2/seller/products', { headers }),
-        fetch('http://localhost:4000/api/v2/seller/product-orders', { headers })
+        fetch('http://localhost:4000/api/v2/seller/product-orders', { headers }),
+        fetch('http://localhost:4000/api/v2/seller/tax-points', { headers })
       ]);
-      const [productsData, ordersData] = await Promise.all([
+      const [productsData, ordersData, taxPointsData] = await Promise.all([
         productsResponse.json(),
-        ordersResponse.json()
+        ordersResponse.json(),
+        taxPointsResponse.json()
       ]);
       if (!productsResponse.ok) throw new Error(productsData.error || 'Failed to load products');
       if (!ordersResponse.ok) throw new Error(ordersData.error || 'Failed to load product orders');
+      if (!taxPointsResponse.ok) throw new Error(taxPointsData.error || 'Failed to load seller tax points');
       setSellerProducts(productsData.products || []);
       setProductOrders(ordersData.orders || []);
+      setSellerTaxPoints(taxPointsData.tax_points);
       setMarketplaceError('');
     } catch (loadError) {
       setMarketplaceError(loadError.message || 'Failed to load seller products and orders');
@@ -243,80 +219,6 @@ const Offers = ({ setUser }) => {
     }
   };
 
-  const handleRewardFormChange = (event) => {
-    setRewardForm(current => ({ ...current, [event.target.name]: event.target.value }));
-  };
-
-  const handleCouponsByEmail = async (event) => {
-    event.preventDefault();
-    try {
-      setEmailCouponLoading(true);
-      setEmailCouponError('');
-      setEmailCoupons(null);
-      const response = await fetch('http://localhost:4000/api/v2/merchant/coupons/user-lookup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `******'greenovation_token') || ''}`
-        },
-        body: JSON.stringify({ email: couponEmail.trim() })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to find active coupons');
-      setEmailCoupons(data.coupons || []);
-    } catch (lookupError) {
-      setEmailCouponError(lookupError.message || 'Failed to find active coupons');
-    } finally {
-      setEmailCouponLoading(false);
-    }
-  };
-
-  const handleRedeemCustomerCoupon = async (couponId) => {
-    try {
-      setRedeemingCouponId(couponId);
-      setEmailCouponError('');
-      const response = await fetch(`http://localhost:4000/api/v2/merchant/coupons/${couponId}/redeem`, {
-        method: 'POST',
-        headers: { Authorization: `******'greenovation_token') || ''}` }
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Coupon could not be redeemed');
-      setEmailCoupons(current => current.map(coupon => (
-        coupon.id === couponId
-          ? { ...coupon, ...data.coupon, redeemed_by_name: userData.name }
-          : coupon
-      )));
-    } catch (redeemError) {
-      setEmailCouponError(redeemError.message || 'Coupon could not be redeemed');
-    } finally {
-      setRedeemingCouponId(null);
-    }
-  };
-
-  const handleCreateReward = async (event) => {
-    event.preventDefault();
-    try {
-      setRewardSaving(true);
-      setRewardError('');
-      const response = await fetch('http://localhost:4000/api/v2/merchant/rewards', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
-        },
-        body: JSON.stringify(rewardForm)
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to create discount reward');
-      setRewardForm({ name: '', points_cost: '', value_amount: '', currency: 'EGP' });
-      await fetchSellerRewards(userData.id);
-    } catch (createError) {
-      setRewardError(createError.message || 'Failed to create discount reward');
-    } finally {
-      setRewardSaving(false);
-    }
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -362,49 +264,6 @@ const Offers = ({ setUser }) => {
 
   const handleInputChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
-  };
-
-  const handleCouponLookup = async (event) => {
-    event.preventDefault();
-    if (!couponCode.trim()) return;
-    try {
-      setCouponLoading(true);
-      setCouponResult(null);
-      const response = await fetch('http://localhost:4000/api/v2/merchant/coupons/lookup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
-        },
-        body: JSON.stringify({ code: couponCode.trim() })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Coupon not found');
-      setCouponResult({ ...data.coupon, valid: data.valid });
-    } catch (lookupError) {
-      setCouponResult({ error: lookupError.message });
-    } finally {
-      setCouponLoading(false);
-    }
-  };
-
-  const handleCouponRedeem = async () => {
-    try {
-      const response = await fetch('http://localhost:4000/api/v2/merchant/coupons/redeem', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('greenovation_token') || ''}`
-        },
-        body: JSON.stringify({ code: couponCode.trim() })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Coupon could not be redeemed');
-      setCouponResult({ ...data.coupon, effective_status: 'REDEEMED', valid: false });
-      setCouponCode('');
-    } catch (redeemError) {
-      setError(redeemError.message);
-    }
   };
 
   const handleGetGPS = () => {
@@ -537,64 +396,56 @@ const Offers = ({ setUser }) => {
       {sellerStatus !== 'VERIFIED' && (
         <section className="seller-verification-notice" role="status">
           <h2>Seller account status: {sellerStatus || 'PENDING_VERIFICATION'}</h2>
-          <p>Coupon verification and redemption are available after Greenovation verifies this business.</p>
+          <p>Product listings are available after Greenovation verifies this business.</p>
         </section>
       )}
-      <section className="seller-rewards-panel" aria-labelledby="seller-rewards-title">
-        <div className="seller-rewards-heading">
-          <div><p className="dashboard-label">DISCOUNT PROGRAM</p><h2 id="seller-rewards-title">Points and discount codes</h2></div>
-          <div className="seller-reward-stats">
-            <div><span>Seller points</span><strong>{Number(sellerPoints).toLocaleString()}</strong></div>
-            <div><span>Codes issued</span><strong>{Number(totalCodesIssued).toLocaleString()}</strong></div>
-          </div>
-        </div>
-        {rewardError && <p className="seller-reward-error" role="alert">{rewardError}</p>}
-        <form className="seller-reward-form" onSubmit={handleCreateReward}>
-          <label>Reward name<input name="name" value={rewardForm.name} onChange={handleRewardFormChange} maxLength="255" required /></label>
-          <label>Points required<input name="points_cost" type="number" min="1" step="1" value={rewardForm.points_cost} onChange={handleRewardFormChange} required /></label>
-          <label>Discount value<input name="value_amount" type="number" min="0.01" step="0.01" value={rewardForm.value_amount} onChange={handleRewardFormChange} required /></label>
-          <label>Currency<select name="currency" value={rewardForm.currency} onChange={handleRewardFormChange}><option value="EGP">EGP</option><option value="USD">USD</option></select></label>
-          <button type="submit" disabled={rewardSaving || sellerStatus !== 'VERIFIED'}>{rewardSaving ? 'Saving...' : 'Add discount reward'}</button>
-        </form>
-        <div className="seller-reward-list">
-          {sellerRewards.length ? sellerRewards.map(reward => (
-            <article className="seller-reward-row" key={reward.id}>
-              <strong>{reward.name}</strong>
-              <span>{reward.points_cost} points</span>
-              <span>{reward.value_amount} {reward.currency || ''} off</span>
-              <span>{reward.codes_issued} codes issued</span>
-            </article>
-          )) : <p>No discount rewards created yet.</p>}
-        </div>
-      </section>
       <section className="seller-products-panel" aria-labelledby="seller-products-title">
-        <div className="seller-rewards-heading">
+        <div className="seller-products-heading">
           <div><p className="dashboard-label">POINTS SHOP</p><h2 id="seller-products-title">Products and pickup orders</h2></div>
         </div>
-        {marketplaceError && <p className="seller-reward-error" role="alert">{marketplaceError}</p>}
+        {marketplaceError && <p className="seller-marketplace-error" role="alert">{marketplaceError}</p>}
         <div className="seller-product-orders" id="product-orders">
+          <section className="seller-tax-points" aria-labelledby="seller-tax-points-title">
+            <h3 id="seller-tax-points-title">Tax deduction points</h3>
+            <p>Awaiting admin verification: <strong>{Number(sellerTaxPoints?.eligible_points || 0).toLocaleString()}</strong> points from {sellerTaxPoints?.eligible_orders || 0} completed pickups.</p>
+            <p>Verified by admin: <strong>{Number(sellerTaxPoints?.verified_points || 0).toLocaleString()}</strong> points ({sellerTaxPoints?.verified_orders || 0} orders).</p>
+            <small>Only customer pickups count. Verification records points toward a tax deduction; it does not calculate a currency amount.</small>
+          </section>
           <h3>Pickup orders ({productOrders.filter(order => order.status === 'pending').length} awaiting confirmation)</h3>
+          <p>Confirm within 24 hours. Customers pick up confirmed orders from your store.</p>
           <p className="seller-product-orders-account">
             Orders for seller account #{userData.id} ({userData.name || 'Seller'}).
           </p>
           {productOrders.length ? productOrders.map(order => (
             <article className="seller-product-order-row" key={order.id}>
               <div><strong>{order.product_name}</strong><span>{order.points_cost} points · {order.user_name} ({order.user_email})</span></div>
-              <span className={`product-order-status ${order.status}`}>{order.status}</span>
+              <span className={`product-order-status ${order.status}`}>
+                {order.status === 'pending'
+                  ? `Awaiting confirmation · ${new Date(order.expires_at).toLocaleString()} deadline`
+                  : order.status === 'approved'
+                    ? 'Confirmed · awaiting customer pickup'
+                    : order.status === 'fulfilled'
+                      ? 'Picked up'
+                      : order.status === 'cancelled'
+                        ? 'Cancelled by customer'
+                        : order.status === 'expired'
+                          ? 'Expired · points and stock released'
+                          : 'Rejected · points and stock released'}
+              </span>
               {order.status === 'pending' && (
                 <div className="seller-product-order-actions">
-                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'approved')}>Confirm order and deduct points</button>
+                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'approved')}>Confirm and prepare for pickup</button>
                   <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'rejected')}>Reject and release stock</button>
                 </div>
               )}
               {order.status === 'approved' && (
                 <>
-                  <span>Confirmed; customer points deducted.</span>
-                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'fulfilled')}>Mark picked up</button>
+                  <span>Customer points are reserved; have them pick up this order at your store.</span>
+                  <button type="button" disabled={updatingOrderId === order.id} onClick={() => handleProductOrderUpdate(order, 'fulfilled')}>Confirm customer pickup</button>
                 </>
               )}
             </article>
-          )) : <p>No pickup orders for this seller account. Check that you are signed in as seller #5 and refresh this page.</p>}
+          )) : <p>No pickup orders for this seller account.</p>}
         </div>
         <form className="seller-product-form" onSubmit={handleCreateProduct}>
           <label>Product name<input name="name" value={productForm.name} onChange={handleProductFormChange} maxLength="255" required /></label>
@@ -617,76 +468,6 @@ const Offers = ({ setUser }) => {
             </article>
           )) : <p>No products listed yet.</p>}
         </div>
-      </section>
-      <section className="coupon-lookup-panel" aria-labelledby="coupon-lookup-title">
-        <h2 id="coupon-lookup-title">Coupon / Discount Code</h2>
-        <p className="coupon-lookup-intro">Find this seller's active coupons by customer email, then redeem a selected coupon.</p>
-        <form className="coupon-lookup-form" onSubmit={handleCouponsByEmail}>
-          <input
-            type="email"
-            value={couponEmail}
-            onChange={event => setCouponEmail(event.target.value)}
-            placeholder="Customer email"
-            aria-label="Customer email"
-            required
-          />
-          <button type="submit" disabled={emailCouponLoading || sellerStatus !== 'VERIFIED'}>
-            {emailCouponLoading ? 'Searching...' : 'Find Active Coupons'}
-          </button>
-        </form>
-        {emailCouponError && <p className="coupon-lookup-error" role="alert">{emailCouponError}</p>}
-        {emailCoupons && (
-          <div className="seller-customer-coupons" aria-live="polite">
-            {emailCoupons.length ? emailCoupons.map(coupon => {
-              const redeemed = coupon.status === 'REDEEMED';
-              return (
-                <article className={`coupon-lookup-result ${redeemed ? 'invalid' : 'valid'}`} key={coupon.id}>
-                  <strong>{redeemed ? 'USED - Coupon Redeemed' : 'ACTIVE - Valid Coupon'}</strong>
-                  <p>Customer: {coupon.user_name || coupon.user_email}</p>
-                  <p>Reward: {coupon.reward_name || 'Discount'} - {coupon.value_amount ?? coupon.reward_value ?? 0} {coupon.currency || 'points'}</p>
-                  <p>Coupon: {coupon.public_reference}</p>
-                  {redeemed
-                    ? <p>Used: {coupon.redeemed_at ? new Date(coupon.redeemed_at).toLocaleString() : 'Just now'}{coupon.redeemed_by_name ? ` by ${coupon.redeemed_by_name}` : ''}</p>
-                    : coupon.expires_at && <p>Expires: {new Date(coupon.expires_at).toLocaleString()}</p>}
-                  <button
-                    type="button"
-                    disabled={redeemed || redeemingCouponId === coupon.id}
-                    onClick={() => handleRedeemCustomerCoupon(coupon.id)}
-                  >
-                    {redeemed ? 'Used' : redeemingCouponId === coupon.id ? 'Checking...' : 'Check / Use Coupon'}
-                  </button>
-                </article>
-              );
-            }) : <p>No active coupons for this customer at your store.</p>}
-          </div>
-        )}
-        {sellerStatus !== 'VERIFIED' && <p className="coupon-lookup-disabled">Coupon search will be available after Seller verification.</p>}
-        <p className="coupon-lookup-intro">Or search using a discount code:</p>
-        <form className="coupon-lookup-form" onSubmit={handleCouponLookup}>
-          <input value={couponCode} onChange={event => setCouponCode(event.target.value)} placeholder="Search discount code" aria-label="Discount code" />
-          <button type="submit" disabled={couponLoading || !couponCode.trim()}>{couponLoading ? 'Searching...' : 'Search Coupon'}</button>
-        </form>
-        {couponResult?.error && <p className="coupon-lookup-error">{couponResult.error}</p>}
-        {couponResult && !couponResult.error && (
-          <div className={`coupon-lookup-result ${couponResult.valid ? 'valid' : 'invalid'}`}>
-            <strong>{
-              couponResult.valid
-                ? 'ACTIVE - Valid Coupon'
-                : (couponResult.effective_status || couponResult.status)?.toUpperCase() === 'REDEEMED'
-                  ? 'USED - Coupon Already Redeemed'
-                  : (couponResult.effective_status || couponResult.status)?.toUpperCase() === 'EXPIRED'
-                    ? 'EXPIRED - Coupon Expired'
-                    : 'INVALID - Coupon Cannot Be Used'
-            }</strong>
-            <p>Customer: {couponResult.user_name || 'Not available'}</p>
-            {couponResult.user_profile_image && <img className="coupon-customer-image" src={couponResult.user_profile_image} alt="Customer profile" />}
-            <p>Reward: {couponResult.reward_value ?? couponResult.value_amount ?? 0}</p>
-            {couponResult.final_weight && <p>Final weight: {couponResult.final_weight} kg</p>}
-            {couponResult.redeemed_at && <p>Used: {new Date(couponResult.redeemed_at).toLocaleString()}{couponResult.redeemed_by_name ? ` by ${couponResult.redeemed_by_name}` : ''}</p>}
-            {!couponResult.redeemed_at && couponResult.expires_at && <p>Expires: {new Date(couponResult.expires_at).toLocaleString()}</p>}
-            {couponResult.valid && <button type="button" onClick={handleCouponRedeem}>Redeem Coupon</button>}
-          </div>
-        )}
       </section>
       <div className="offer-actions">
         <button 

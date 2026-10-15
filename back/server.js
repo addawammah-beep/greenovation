@@ -3,7 +3,7 @@ require("dotenv").config({ path: path.join(__dirname, "db.env") });
 const analyzeImage = require("./gemini");
 const multer = require("multer");
 const fs = require("fs");
-const crypto = require('crypto');
+const crypto = require("crypto");
 const bodyParser = require('body-parser');
 const express = require('express');
 const cors = require('cors');
@@ -12,6 +12,13 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { calculatePoints, verifyArrival, reconcileWeights } = require('./domain');
 const app = express();
+const REPORT_IMAGE_DIR = path.join(__dirname, "report-images");
+const REPORT_IMAGE_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp"
+};
 
 app.use(express.json({ limit: "10mb" })); // Allow profile images stored as data URLs
 app.use(cors());
@@ -62,6 +69,16 @@ const upload = multer({
         } else {
             cb(new Error("Only image files are allowed."));
         }
+    },
+});
+
+const reportUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowed = ["image/jpeg", "image/png", "image/jpg", "image/webp"];
+        if (allowed.includes(file.mimetype)) cb(null, true);
+        else cb(new Error("Only image files are allowed."));
     },
 });
 
@@ -120,6 +137,56 @@ const enqueueNotification = async (client, event) => {
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [event.recipientId, event.recipientRole, event.eventType, event.entityType || null, String(event.entityId || ''), event.payload || {}]
     );
+};
+
+const expirePendingProductOrders = async (client, orderId = null) => {
+    const expired = await client.query(`SELECT id, product_id, user_id, points_cost, points_deducted
+        FROM product_orders
+        WHERE status = 'pending' AND created_at <= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+            AND ($1::integer IS NULL OR id = $1)
+        ORDER BY created_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT 100`, [orderId]);
+    for (const order of expired.rows) {
+        if (order.points_deducted) {
+            await client.query('UPDATE users SET points = COALESCE(points, 0) + $1 WHERE id = $2',
+                [order.points_cost, order.user_id]);
+            await client.query(`INSERT INTO point_ledger (user_id, request_id, points, reason)
+                VALUES ($1, NULL, $2, 'product_redemption_expired')`,
+            [order.user_id, order.points_cost]);
+        }
+        if (order.product_id) {
+            await client.query(`UPDATE seller_products
+                SET stock = stock + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1`, [order.product_id]);
+        }
+        await client.query(`UPDATE product_orders
+            SET status = 'expired', points_deducted = FALSE, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1`, [order.id]);
+        await audit(client, {
+            action: 'PRODUCT_ORDER_EXPIRED',
+            entityType: 'product_order',
+            entityId: order.id,
+            previousValue: { status: 'pending' },
+            newValue: { status: 'expired' }
+        });
+    }
+    return expired.rowCount;
+};
+
+const processExpiredProductOrders = async () => {
+    const client = await db.connect();
+    try {
+        await client.query('BEGIN');
+        const expiredCount = await expirePendingProductOrders(client);
+        await client.query('COMMIT');
+        return expiredCount;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 };
 
 const processNotificationOutbox = async () => {
@@ -862,23 +929,13 @@ app.post('/api/v2/requests/:id/weight-confirmation', authenticate, authorize('us
         const updated = await client.query("UPDATE requests SET status = 'COMPLETED', actual_weight = $4, completed_at = CURRENT_TIMESTAMP, weight_confirmed_at = CURRENT_TIMESTAMP, weight_confirmed_by = $1, points_awarded = $2 WHERE id = $3 AND status IN ('AWAITING_USER_CONFIRMATION', 'completion_pending', 'waiting_user_weight_confirmation') RETURNING *", [req.auth.sub, points, req.params.id, actualWeight]);
         await client.query('INSERT INTO point_ledger (user_id, request_id, points, reason) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [req.auth.sub, req.params.id, points, 'verified_collection']);
         await client.query('UPDATE users SET points = COALESCE(points, 0) + $1 WHERE id = $2', [points, req.auth.sub]);
-        const reward = await client.query(`INSERT INTO rewards (name, points_cost, value_amount, currency, active)
-            VALUES ('Recycling reward', 0, $1, 'POINTS', TRUE) RETURNING id`, [points]);
-        const rawCode = crypto.randomBytes(18).toString('hex').toUpperCase();
-        const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
-        const coupon = await client.query(`INSERT INTO coupons (public_reference, code, secure_code_hash, reward_id, user_id, user_name, request_id, final_weight, reward_value, points_earned)
-            VALUES ('CPN-' || upper(substr(md5(random()::text), 1, 10)), $1, $2, $3, $4, (SELECT name FROM users WHERE id = $4), $5, $6, $7, $8)
-            ON CONFLICT (request_id) DO NOTHING
-            RETURNING id, public_reference, code, reward_id, user_id, user_name, request_id, final_weight, reward_value, points_earned, status, created_at`, [rawCode, codeHash, reward.rows[0].id, req.auth.sub, req.params.id, actualWeight, points, points]);
-        const issuedCoupon = coupon.rows[0] ? { ...coupon.rows[0], code: rawCode, reward_value: points } : null;
-        if (coupon.rows[0]) await client.query('INSERT INTO coupon_events (coupon_id, event_type, metadata) VALUES ($1, $2, $3)', [coupon.rows[0].id, 'ISSUED', JSON.stringify({ request_id: req.params.id, points })]);
         await client.query(`INSERT INTO material_batches (public_reference, request_id, material_type, collection_weight, status)
             VALUES ('BAT-' || upper(substr(md5(random()::text), 1, 10)), $1, $2, $3, 'created') ON CONFLICT (request_id) DO NOTHING`, [req.params.id, request.material_type, actualWeight]);
         await client.query("INSERT INTO request_status_history (request_id, old_status, new_status, changed_by_user_id, changed_by_role) VALUES ($1, $2, 'COMPLETED', $3, 'user')", [req.params.id, request.status, req.auth.sub]);
         await audit(client, { actorId: req.auth.sub, actorRole: req.auth.role, action: 'WEIGHT_CONFIRMED_AND_POINTS_CALCULATED', entityType: 'request', entityId: req.params.id, previousValue: { status: request.status }, newValue: { status: 'COMPLETED', points, final_weight: actualWeight } });
         const user = await client.query('SELECT id, name, email, points FROM users WHERE id = $1', [req.auth.sub]);
         await client.query('COMMIT');
-        res.json({ request: updated.rows[0], points_added: points, coupon: issuedCoupon, user: user.rows[0] });
+        res.json({ request: updated.rows[0], points_added: points, user: user.rows[0] });
     } catch (error) { await client.query('ROLLBACK'); console.error('Weight confirmation failed:', error); res.status(500).json({ error: 'Failed to process weight confirmation' }); }
     finally { client.release(); }
 });
@@ -898,7 +955,6 @@ app.post('/api/v2/batches/:id/receive', authenticate, authorize('recycler'), asy
         res.json({ batch: updated.rows[0], reconciliation });
     } catch (error) { console.error('Batch receipt failed:', error); res.status(500).json({ error: 'Failed to record recycling receipt' }); }
 });
-
 app.get('/api/v2/recycler/batches', authenticate, authorize('recycler'), async (req, res) => {
     try {
         const result = await db.query(`SELECT b.id, b.public_reference, b.material_type, b.collection_weight,
@@ -919,11 +975,66 @@ app.get('/api/v2/admin/overview', authenticate, authorize('admin'), async (req, 
             (SELECT COUNT(*) FROM requests WHERE status IN ('CREATED', 'pending'))::int AS pending_requests,
             (SELECT COUNT(*) FROM requests WHERE status IN ('COMPLETED', 'completed'))::int AS completed_collections,
             (SELECT COUNT(*) FROM disputes WHERE status = 'open')::int AS open_disputes,
-            (SELECT COUNT(*) FROM material_batches WHERE variance_flagged = TRUE)::int AS flagged_batches,
-            (SELECT COUNT(*) FROM coupons WHERE status = 'REDEEMED')::int AS redeemed_coupons`);
+            (SELECT COUNT(*) FROM material_batches WHERE variance_flagged = TRUE)::int AS flagged_batches`);
         await audit(db, { actorId: req.auth.sub, actorRole: req.auth.role, action: 'ADMIN_OVERVIEW_VIEWED', entityType: 'platform', entityId: 'overview' });
         res.json({ overview: result.rows[0] });
     } catch (error) { res.status(500).json({ error: 'Failed to load admin overview' }); }
+});
+
+app.get('/api/v2/admin/reports', authenticate, authorize('admin'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT id, user_id, problem_type, address, description,
+                latitude, longitude, ai_contains_trash, ai_confidence, ai_reason,
+                captured_at, capture_accuracy_m, capture_method, status, created_at
+            FROM reports
+            ORDER BY created_at DESC, id DESC
+            LIMIT 100`);
+        await audit(db, {
+            actorId: req.auth.sub,
+            actorRole: req.auth.role,
+            action: 'ADMIN_REPORTS_VIEWED',
+            entityType: 'reports',
+            entityId: 'latest'
+        });
+        res.json({ reports: result.rows });
+    } catch (error) {
+        console.error('Admin environmental reports load failed:', error);
+        res.status(500).json({ error: 'Failed to load environmental reports' });
+    }
+});
+
+app.get('/api/v2/admin/reports/:id/image', authenticate, authorize('admin'), async (req, res) => {
+    const reportId = Number(req.params.id);
+    if (!Number.isSafeInteger(reportId) || reportId < 1) {
+        return res.status(400).json({ error: 'Invalid report ID' });
+    }
+
+    try {
+        const result = await db.query('SELECT image FROM reports WHERE id = $1', [reportId]);
+        const filename = result.rows[0]?.image;
+        if (!filename || path.basename(filename) !== filename) {
+            return res.status(404).json({ error: 'No saved image was found for this report' });
+        }
+
+        const extension = path.extname(filename).toLowerCase();
+        const mimeType = Object.entries(REPORT_IMAGE_EXTENSIONS)
+            .find(([, allowedExtension]) => allowedExtension === extension)?.[0];
+        if (!mimeType) {
+            return res.status(404).json({ error: 'No saved image was found for this report' });
+        }
+
+        const image = await fs.promises.readFile(path.join(REPORT_IMAGE_DIR, filename));
+        res.set('Cache-Control', 'private, no-store');
+        res.type(mimeType);
+        res.send(image);
+    } catch (error) {
+        console.error('Admin report image load failed:', {
+            reportId,
+            message: error.message,
+            code: error.code
+        });
+        res.status(500).json({ error: 'Failed to load the report image' });
+    }
 });
 
 app.patch('/api/v2/admin/collectors/:id/status', authenticate, authorize('admin'), async (req, res) => {
@@ -972,6 +1083,86 @@ app.get('/api/v2/admin/sellers', authenticate, authorize('admin'), async (req, r
     } catch (error) { res.status(500).json({ error: 'Failed to load seller registrations' }); }
 });
 
+app.get('/api/v2/admin/seller-tax-points', authenticate, authorize('admin'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT s.id AS seller_id, s.name AS seller_name, s.email AS seller_email,
+                COUNT(o.id) FILTER (WHERE o.status = 'fulfilled' AND c.order_id IS NULL)::int AS eligible_orders,
+                COALESCE(SUM(o.points_cost) FILTER (WHERE o.status = 'fulfilled' AND c.order_id IS NULL), 0)::bigint AS eligible_points,
+                COUNT(c.order_id)::int AS verified_orders,
+                COALESCE(SUM(c.points), 0)::bigint AS verified_points,
+                COALESCE(
+                    JSON_AGG(JSON_BUILD_OBJECT(
+                        'order_id', o.id,
+                        'product_name', o.product_name,
+                        'points', o.points_cost,
+                        'fulfilled_at', o.updated_at
+                    ) ORDER BY o.updated_at) FILTER (WHERE o.status = 'fulfilled' AND c.order_id IS NULL),
+                    '[]'::json
+                ) AS eligible_order_details
+            FROM sellers s
+            LEFT JOIN product_orders o ON o.seller_id = s.id
+            LEFT JOIN seller_tax_point_credits c ON c.order_id = o.id
+            GROUP BY s.id, s.name, s.email
+            HAVING COUNT(o.id) FILTER (WHERE o.status = 'fulfilled' AND c.order_id IS NULL) > 0
+                OR COUNT(c.order_id) > 0
+            ORDER BY s.name, s.id`);
+        res.json({ sellers: result.rows });
+    } catch (error) {
+        console.error('Seller tax point review load failed:', error);
+        res.status(500).json({ error: 'Failed to load seller tax points' });
+    }
+});
+
+app.post('/api/v2/admin/sellers/:id/seller-tax-points/approve', authenticate, authorize('admin'), async (req, res) => {
+    const client = await db.connect();
+    try {
+        await client.query('BEGIN');
+        const sellerResult = await client.query('SELECT id FROM sellers WHERE id = $1 FOR UPDATE', [req.params.id]);
+        if (!sellerResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Seller not found' });
+        }
+        const eligible = await client.query(`SELECT o.id, o.points_cost
+            FROM product_orders o
+            LEFT JOIN seller_tax_point_credits c ON c.order_id = o.id
+            WHERE o.seller_id = $1 AND o.status = 'fulfilled' AND c.order_id IS NULL
+            ORDER BY o.updated_at, o.id
+            FOR UPDATE OF o`, [req.params.id]);
+        if (!eligible.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'There are no unverified fulfilled orders for this seller' });
+        }
+        const credited = await client.query(`INSERT INTO seller_tax_point_credits (order_id, seller_id, points, verified_by)
+            SELECT o.id, o.seller_id, o.points_cost, $2
+            FROM product_orders o
+            WHERE o.id = ANY($1::bigint[]) AND o.seller_id = $3 AND o.status = 'fulfilled'
+            ON CONFLICT (order_id) DO NOTHING
+            RETURNING order_id, points`,
+            [eligible.rows.map(order => order.id), req.auth.sub, req.params.id]);
+        if (!credited.rowCount) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'These order points have already been verified' });
+        }
+        const points = credited.rows.reduce((total, row) => total + Number(row.points), 0);
+        await audit(client, {
+            actorId: req.auth.sub,
+            actorRole: 'admin',
+            action: 'SELLER_TAX_POINTS_VERIFIED',
+            entityType: 'seller',
+            entityId: req.params.id,
+            newValue: { points, orderCount: credited.rowCount, orderIds: credited.rows.map(row => row.order_id) }
+        });
+        await client.query('COMMIT');
+        res.json({ seller_id: Number(req.params.id), verified_points: points, verified_orders: credited.rowCount });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Seller tax point verification failed:', error);
+        res.status(500).json({ error: 'Failed to verify seller tax points' });
+    } finally {
+        client.release();
+    }
+});
+
 app.patch('/api/v2/admin/sellers/:id/status', authenticate, authorize('admin'), async (req, res) => {
     const statusMap = { approve: 'VERIFIED', verify: 'VERIFIED', reject: 'REJECTED', suspend: 'SUSPENDED' };
     const status = statusMap[String(req.body.status || '').toLowerCase()];
@@ -1007,8 +1198,10 @@ app.get('/api/v2/products', authenticate, authorize('user'), async (req, res) =>
 
 app.get('/api/v2/user/product-orders', authenticate, authorize('user'), async (req, res) => {
     try {
+        await processExpiredProductOrders();
         const result = await db.query(`SELECT o.id, o.product_id, o.product_name, o.points_cost, o.status,
-                o.created_at, o.updated_at, s.name AS seller_name
+                o.created_at, o.created_at + INTERVAL '24 hours' AS expires_at,
+                o.updated_at, o.points_deducted, s.name AS seller_name
             FROM product_orders o
             JOIN sellers s ON s.id = o.seller_id
             WHERE o.user_id = $1
@@ -1051,10 +1244,19 @@ app.post('/api/v2/products/:productId/redeem', authenticate, authorize('user'), 
             await client.query('ROLLBACK');
             return res.status(409).json({ error: 'Product is no longer in stock' });
         }
+        const debitResult = await client.query(`UPDATE users SET points = points - $1
+            WHERE id = $2 AND points >= $1 RETURNING points`, [product.points_cost, req.auth.sub]);
+        if (!debitResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(422).json({ error: 'Insufficient points' });
+        }
+        await client.query(`INSERT INTO point_ledger (user_id, request_id, points, reason)
+            VALUES ($1, NULL, $2, 'product_redemption')`, [req.auth.sub, -product.points_cost]);
         const orderResult = await client.query(`INSERT INTO product_orders
             (product_id, seller_id, user_id, product_name, points_cost, points_deducted)
-            VALUES ($1, $2, $3, $4, $5, FALSE)
-            RETURNING id, product_id, product_name, points_cost, status, points_deducted, created_at`,
+            VALUES ($1, $2, $3, $4, $5, TRUE)
+            RETURNING id, product_id, product_name, points_cost, status, points_deducted, created_at,
+                created_at + INTERVAL '24 hours' AS expires_at`,
             [product.id, product.seller_id, req.auth.sub, product.name, product.points_cost]);
         await audit(client, {
             actorId: req.auth.sub,
@@ -1067,13 +1269,75 @@ app.post('/api/v2/products/:productId/redeem', authenticate, authorize('user'), 
         await client.query('COMMIT');
         res.status(201).json({
             order: orderResult.rows[0],
-            points: Number(userResult.rows[0].points),
+            points: Number(debitResult.rows[0].points),
             stock: stockResult.rows[0].stock
         });
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Product redemption failed:', error);
         res.status(500).json({ error: 'Failed to redeem product' });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/v2/user/product-orders/:orderId/cancel', authenticate, authorize('user'), async (req, res) => {
+    const client = await db.connect();
+    try {
+        await client.query('BEGIN');
+        await expirePendingProductOrders(client, req.params.orderId);
+        const orderResult = await client.query(`SELECT id, product_id, user_id, points_cost, status, points_deducted
+            FROM product_orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        [req.params.orderId, req.auth.sub]);
+        if (!orderResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Product order not found' });
+        }
+        const order = orderResult.rows[0];
+        if (order.status !== 'pending') {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'Only pending orders can be cancelled' });
+        }
+
+        let points;
+        if (order.points_deducted) {
+            const userResult = await client.query(`UPDATE users SET points = COALESCE(points, 0) + $1
+                WHERE id = $2 RETURNING points`, [order.points_cost, req.auth.sub]);
+            points = Number(userResult.rows[0].points);
+            await client.query(`INSERT INTO point_ledger (user_id, request_id, points, reason)
+                VALUES ($1, NULL, $2, 'product_redemption_cancelled')`,
+            [req.auth.sub, order.points_cost]);
+        } else {
+            const userResult = await client.query('SELECT COALESCE(points, 0) AS points FROM users WHERE id = $1', [req.auth.sub]);
+            points = Number(userResult.rows[0]?.points || 0);
+        }
+        let stock = null;
+        if (order.product_id) {
+            const productResult = await client.query(`UPDATE seller_products
+                SET stock = stock + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1 RETURNING stock`, [order.product_id]);
+            stock = productResult.rows[0]?.stock ?? null;
+        }
+        const updated = await client.query(`UPDATE product_orders
+            SET status = 'cancelled', points_deducted = FALSE, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING id, product_id, product_name, points_cost, status, points_deducted, created_at, updated_at`,
+        [order.id]);
+        await audit(client, {
+            actorId: req.auth.sub,
+            actorRole: 'user',
+            action: 'PRODUCT_ORDER_CANCELLED',
+            entityType: 'product_order',
+            entityId: order.id,
+            previousValue: { status: 'pending' },
+            newValue: { status: 'cancelled' }
+        });
+        await client.query('COMMIT');
+        res.json({ order: updated.rows[0], points, stock });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Product order cancellation failed:', error);
+        res.status(500).json({ error: 'Failed to cancel product order' });
     } finally {
         client.release();
     }
@@ -1152,8 +1416,10 @@ app.patch('/api/v2/seller/products/:productId', authenticate, authorize('merchan
 
 app.get('/api/v2/seller/product-orders', authenticate, authorize('merchant'), async (req, res) => {
     try {
+        await processExpiredProductOrders();
         const result = await db.query(`SELECT o.id, o.product_id, o.product_name, o.points_cost, o.status,
-                o.created_at, o.updated_at, u.name AS user_name, u.email AS user_email
+                o.created_at, o.created_at + INTERVAL '24 hours' AS expires_at,
+                o.updated_at, o.points_deducted, u.name AS user_name, u.email AS user_email
             FROM product_orders o
             JOIN users u ON u.id = o.user_id
             WHERE o.seller_id = $1
@@ -1165,6 +1431,23 @@ app.get('/api/v2/seller/product-orders', authenticate, authorize('merchant'), as
     }
 });
 
+app.get('/api/v2/seller/tax-points', authenticate, authorize('merchant'), async (req, res) => {
+    try {
+        const result = await db.query(`SELECT
+                COUNT(o.id) FILTER (WHERE o.status = 'fulfilled' AND c.order_id IS NULL)::int AS eligible_orders,
+                COALESCE(SUM(o.points_cost) FILTER (WHERE o.status = 'fulfilled' AND c.order_id IS NULL), 0)::bigint AS eligible_points,
+                COUNT(c.order_id)::int AS verified_orders,
+                COALESCE(SUM(c.points), 0)::bigint AS verified_points
+            FROM product_orders o
+            LEFT JOIN seller_tax_point_credits c ON c.order_id = o.id
+            WHERE o.seller_id = $1`, [req.auth.sub]);
+        res.json({ tax_points: result.rows[0] });
+    } catch (error) {
+        console.error('Seller tax point summary load failed:', error);
+        res.status(500).json({ error: 'Failed to load seller tax points' });
+    }
+});
+
 app.patch('/api/v2/seller/product-orders/:orderId', authenticate, authorize('merchant'), async (req, res) => {
     const status = req.body.status;
     if (!['approved', 'rejected', 'fulfilled'].includes(status)) {
@@ -1173,6 +1456,7 @@ app.patch('/api/v2/seller/product-orders/:orderId', authenticate, authorize('mer
     const client = await db.connect();
     try {
         await client.query('BEGIN');
+        await expirePendingProductOrders(client, req.params.orderId);
         const orderResult = await client.query(`SELECT id, product_id, user_id, product_name, points_cost,
                 status, points_deducted
             FROM product_orders WHERE id = $1 AND seller_id = $2 FOR UPDATE`, [req.params.orderId, req.auth.sub]);
@@ -1218,7 +1502,8 @@ app.patch('/api/v2/seller/product-orders/:orderId', authenticate, authorize('mer
         }
         const updated = await client.query(`UPDATE product_orders
             SET status = $1::varchar,
-                points_deducted = CASE WHEN $1::text = 'approved' THEN TRUE ELSE points_deducted END,
+                points_deducted = CASE WHEN $1::text = 'approved' THEN TRUE
+                    WHEN $1::text = 'rejected' THEN FALSE ELSE points_deducted END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
             RETURNING id, product_id, product_name, points_cost, status, points_deducted, created_at, updated_at`,
@@ -1241,183 +1526,6 @@ app.patch('/api/v2/seller/product-orders/:orderId', authenticate, authorize('mer
     } finally {
         client.release();
     }
-});
-
-app.post('/api/v2/rewards/:rewardId/issue', authenticate, authorize('user'), async (req, res) => {
-    const client = await db.connect();
-    try {
-        await client.query('BEGIN');
-        const rewardResult = await client.query('SELECT * FROM rewards WHERE id = $1 AND active = TRUE AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP) FOR UPDATE', [req.params.rewardId]);
-        if (!rewardResult.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Reward is not available' }); }
-        const reward = rewardResult.rows[0];
-        const userResult = await client.query('SELECT points FROM users WHERE id = $1 FOR UPDATE', [req.auth.sub]);
-        if (!userResult.rows.length || Number(userResult.rows[0].points) < Number(reward.points_cost)) { await client.query('ROLLBACK'); return res.status(422).json({ error: 'Insufficient points' }); }
-        const rawCode = crypto.randomBytes(18).toString('hex').toUpperCase();
-        const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
-        const coupon = await client.query(`INSERT INTO coupons (public_reference, code, secure_code_hash, reward_id, user_id, seller_id, user_name, expires_at)
-            VALUES ('CPN-' || upper(substr(md5(random()::text), 1, 10)), $1, $2, $3, $4, $5, (SELECT name FROM users WHERE id = $4), $6)
-            RETURNING id, public_reference, code, reward_id, user_id, seller_id, user_name, status, expires_at, created_at`, [rawCode, codeHash, reward.id, req.auth.sub, reward.seller_id, reward.expires_at]);
-        await client.query('UPDATE users SET points = points - $1 WHERE id = $2', [reward.points_cost, req.auth.sub]);
-        await client.query('INSERT INTO coupon_events (coupon_id, event_type, metadata) VALUES ($1, $2, $3)', [coupon.rows[0].id, 'ISSUED', JSON.stringify({ reward_id: reward.id })]);
-        await audit(client, { actorId: req.auth.sub, actorRole: req.auth.role, action: 'COUPON_CREATED', entityType: 'coupon', entityId: coupon.rows[0].id, newValue: coupon.rows[0] });
-        await client.query('COMMIT');
-        res.status(201).json({ coupon: { ...coupon.rows[0], code: rawCode } });
-    } catch (error) { await client.query('ROLLBACK'); console.error('Coupon issue failed:', error); res.status(500).json({ error: 'Failed to issue coupon' }); }
-    finally { client.release(); }
-});
-
-app.get('/api/v2/user/coupons', authenticate, authorize('user'), async (req, res) => {
-    try {
-        const result = await db.query(`SELECT c.id, c.public_reference, c.code, c.request_id,
-                c.final_weight, c.reward_value, c.points_earned, c.status, c.created_at,
-                c.redeemed_at, c.redeemed_by, redeemed_seller.name AS redeemed_by_name,
-                r.name AS reward_name,
-                CASE WHEN c.status = 'REDEEMED' OR (c.expires_at IS NOT NULL AND c.expires_at <= CURRENT_TIMESTAMP)
-                    THEN 'inactive' ELSE 'active' END AS coupon_group,
-                c.expires_at
-            FROM coupons c
-            LEFT JOIN rewards r ON r.id = c.reward_id
-            LEFT JOIN sellers redeemed_seller ON redeemed_seller.id = c.redeemed_by
-            WHERE c.user_id = $1
-            ORDER BY c.created_at DESC`, [req.auth.sub]);
-        const user = await db.query('SELECT COALESCE(points, 0) AS points FROM users WHERE id = $1', [req.auth.sub]);
-        res.json({ coupons: result.rows, points: user.rows[0]?.points ?? 0 });
-    } catch (error) {
-        console.error('User coupons failed:', error);
-        res.status(500).json({ error: 'Failed to load coupons' });
-    }
-});
-
-app.post('/api/v2/merchant/coupons/user-lookup', authenticate, authorize('merchant'), async (req, res) => {
-    const email = String(req.body.email || '').trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({ error: 'A valid customer email is required' });
-    }
-    try {
-        const seller = await db.query('SELECT account_status FROM sellers WHERE id = $1', [req.auth.sub]);
-        if (!seller.rows.length || seller.rows[0].account_status !== 'VERIFIED') {
-            return res.status(403).json({ error: 'Seller account must be VERIFIED to verify coupons' });
-        }
-        const result = await db.query(`SELECT c.id, c.public_reference, c.status, c.expires_at,
-                c.created_at, c.reward_value, c.final_weight, u.id AS user_id, u.name AS user_name,
-                u.email AS user_email, u.profile_image AS user_profile_image,
-                r.name AS reward_name, r.value_amount, r.currency
-            FROM coupons c
-            JOIN users u ON u.id = c.user_id
-            LEFT JOIN rewards r ON r.id = c.reward_id
-            WHERE lower(u.email) = lower($1)
-                AND (c.seller_id = $2 OR c.seller_id IS NULL)
-                AND c.status = 'ACTIVE'
-                AND (c.expires_at IS NULL OR c.expires_at > CURRENT_TIMESTAMP)
-            ORDER BY c.created_at DESC`, [email, req.auth.sub]);
-        await audit(db, {
-            actorId: req.auth.sub,
-            actorRole: req.auth.role,
-            action: 'COUPONS_LOOKED_UP_BY_EMAIL',
-            entityType: 'user',
-            entityId: result.rows[0]?.user_id,
-            metadata: { active_coupon_count: result.rows.length }
-        });
-        res.json({ coupons: result.rows });
-    } catch (error) {
-        console.error('Coupon email lookup failed:', error);
-        res.status(500).json({ error: 'Failed to find active coupons' });
-    }
-});
-
-app.post('/api/v2/merchant/coupons/:couponId/redeem', authenticate, authorize('merchant'), async (req, res) => {
-    const client = await db.connect();
-    try {
-        await client.query('BEGIN');
-        const seller = await client.query('SELECT account_status FROM sellers WHERE id = $1', [req.auth.sub]);
-        if (!seller.rows.length || seller.rows[0].account_status !== 'VERIFIED') {
-            await client.query('ROLLBACK');
-            return res.status(403).json({ error: 'Seller account must be VERIFIED to redeem coupons' });
-        }
-        const result = await client.query(`UPDATE coupons
-            SET status = 'REDEEMED', seller_id = $1, redeemed_at = CURRENT_TIMESTAMP, redeemed_by = $1
-            WHERE id = $2 AND (seller_id = $1 OR seller_id IS NULL) AND status = 'ACTIVE'
-                AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-            RETURNING id, public_reference, status, redeemed_at`,
-        [req.auth.sub, req.params.couponId]);
-        if (!result.rows.length) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ error: 'Coupon is invalid, expired, or already redeemed' });
-        }
-        await client.query(
-            'INSERT INTO coupon_events (coupon_id, merchant_id, event_type) VALUES ($1, $2, $3)',
-            [result.rows[0].id, req.auth.sub, 'REDEEMED']
-        );
-        await audit(client, {
-            actorId: req.auth.sub,
-            actorRole: req.auth.role,
-            action: 'COUPON_REDEEMED',
-            entityType: 'coupon',
-            entityId: result.rows[0].id,
-            newValue: { status: 'REDEEMED' }
-        });
-        await client.query('COMMIT');
-        res.json({ coupon: result.rows[0] });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Coupon redemption failed:', error);
-        res.status(500).json({ error: 'Failed to redeem coupon' });
-    } finally {
-        client.release();
-    }
-});
-
-app.post('/api/v2/merchant/coupons/lookup', authenticate, authorize('merchant'), async (req, res) => {
-    const codeHash = crypto.createHash('sha256').update(String(req.body.code || '')).digest('hex');
-    if (!req.body.code) return res.status(400).json({ error: 'Coupon code is required' });
-    try {
-        const seller = await db.query('SELECT id, name, account_status FROM sellers WHERE id = $1', [req.auth.sub]);
-        if (!seller.rows.length || seller.rows[0].account_status !== 'VERIFIED') return res.status(403).json({ error: 'Seller account must be VERIFIED to verify coupons' });
-        const result = await db.query(`SELECT c.public_reference, c.status, c.expires_at, c.created_at,
-            c.redeemed_at, redeemed_seller.name AS redeemed_by_name,
-            CASE
-                WHEN c.status = 'REDEEMED' THEN 'REDEEMED'
-                WHEN c.expires_at IS NOT NULL AND c.expires_at <= CURRENT_TIMESTAMP THEN 'EXPIRED'
-                ELSE c.status
-            END AS effective_status,
-            c.user_id, u.name AS user_name, u.profile_image AS user_profile_image,
-            c.request_id, c.final_weight, c.reward_value,
-            c.seller_id, s.name AS seller_name, r.name AS reward_name, r.value_amount, r.currency
-            FROM coupons c
-            JOIN rewards r ON r.id = c.reward_id
-            LEFT JOIN users u ON u.id = c.user_id
-            LEFT JOIN requests req ON req.id = c.request_id
-            LEFT JOIN sellers s ON s.id = c.seller_id
-            LEFT JOIN sellers redeemed_seller ON redeemed_seller.id = c.redeemed_by
-            WHERE c.secure_code_hash = $1 AND (c.seller_id = $2 OR c.seller_id IS NULL)`, [codeHash, req.auth.sub]);
-        await audit(db, { actorId: req.auth.sub, actorRole: req.auth.role, action: 'COUPON_LOOKUP', entityType: 'coupon', entityId: result.rows[0]?.public_reference, metadata: { found: Boolean(result.rows.length) } });
-        if (!result.rows.length) return res.status(404).json({ error: 'Coupon not found' });
-        const coupon = result.rows[0];
-        const valid = coupon.effective_status === 'ACTIVE';
-        res.json({ coupon, valid });
-    } catch (error) { res.status(500).json({ error: 'Failed to lookup coupon' }); }
-});
-
-app.post('/api/v2/merchant/coupons/redeem', authenticate, authorize('merchant'), async (req, res) => {
-    const codeHash = crypto.createHash('sha256').update(String(req.body.code || '')).digest('hex');
-    if (!req.body.code) return res.status(400).json({ error: 'Coupon code is required' });
-    const client = await db.connect();
-    try {
-        await client.query('BEGIN');
-        const seller = await client.query('SELECT account_status FROM sellers WHERE id = $1', [req.auth.sub]);
-        if (!seller.rows.length || seller.rows[0].account_status !== 'VERIFIED') { await client.query('ROLLBACK'); return res.status(403).json({ error: 'Seller account must be VERIFIED to redeem coupons' }); }
-        const result = await client.query(`UPDATE coupons
-            SET status = 'REDEEMED', redeemed_at = CURRENT_TIMESTAMP, redeemed_by = $1, seller_id = $1
-            WHERE secure_code_hash = $2 AND (seller_id = $1 OR seller_id IS NULL)
-                AND status = 'ACTIVE' AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-            RETURNING *`, [req.auth.sub, codeHash]);
-        if (!result.rows.length) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Coupon is invalid, expired, or already redeemed' }); }
-        await client.query('INSERT INTO coupon_events (coupon_id, merchant_id, event_type) VALUES ($1, $2, $3)', [result.rows[0].id, req.auth.sub, 'REDEEMED']);
-        await audit(client, { actorId: req.auth.sub, actorRole: req.auth.role, action: 'COUPON_REDEEMED', entityType: 'coupon', entityId: result.rows[0].id, newValue: { status: 'REDEEMED' } });
-        await client.query('COMMIT');
-        res.json({ coupon: result.rows[0] });
-    } catch (error) { await client.query('ROLLBACK'); res.status(500).json({ error: 'Failed to redeem coupon' }); }
-    finally { client.release(); }
 });
 
 // Offers endpoints
@@ -1562,79 +1670,14 @@ app.put('/api/requests/respond', async (req, res) => {
 });
 
 app.put('/api/requests/confirm-completion', async (req, res) => {
-    return res.status(410).json({ error: 'This workflow is retired. Use the v2 weight-confirmation endpoint.' });
-    try {
-        const { request_id, user_id, action } = req.body;
-        if (!request_id || !user_id || !['confirm', 'reject'].includes(action)) {
-            return res.status(400).json({ error: 'Missing or invalid completion confirmation' });
-        }
-
-        const client = await db.connect();
-        try {
-            await client.query('BEGIN');
-            const result = action === 'confirm'
-                ? await client.query(
-                    `UPDATE requests SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
-                                                        weight_confirmed_at = CURRENT_TIMESTAMP, weight_confirmed_by = $2,
-                                                        actual_weight = COALESCE(actual_weight, collected_weight)
-                                         WHERE id = $1 AND user_id = $2 AND status = 'completion_pending'
-                                             AND COALESCE(actual_weight, collected_weight) IS NOT NULL
-                     RETURNING *`,
-                    [request_id, user_id]
-                )
-                : await client.query(
-                    `UPDATE requests SET status = 'in_progress', collected_weight = NULL, actual_weight = NULL
-                                         WHERE id = $1 AND user_id = $2 AND status = 'completion_pending'
-                                             AND COALESCE(actual_weight, collected_weight) IS NOT NULL
-                     RETURNING *`,
-                    [request_id, user_id]
-                );
-
-            if (!result.rows.length) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({ error: 'Request not found or unauthorized' });
-            }
-            if (action === 'confirm') {
-                const rule = await client.query('SELECT points_per_kg, rounding FROM material_types WHERE code = $1 AND active = TRUE', [result.rows[0].material_type]);
-                const verifiedWeight = Number(result.rows[0].actual_weight ?? result.rows[0].collected_weight);
-                const points = rule.rows.length
-                    ? calculatePoints({ actualWeight: verifiedWeight, pointsPerKg: rule.rows[0].points_per_kg, rounding: rule.rows[0].rounding })
-                    : 0;
-                await client.query('UPDATE requests SET points_awarded = $1 WHERE id = $2', [points, request_id]);
-                await client.query('INSERT INTO point_ledger (user_id, request_id, points, reason) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [user_id, request_id, points, 'verified_collection']);
-                await client.query('UPDATE users SET points = COALESCE(points, 0) + $1 WHERE id = $2', [points, user_id]);
-                const reward = await client.query(`INSERT INTO rewards (name, points_cost, value_amount, currency, active)
-                    VALUES ('Recycling reward', 0, $1, 'POINTS', TRUE) RETURNING id, seller_id`, [points]);
-                const rawCode = crypto.randomBytes(18).toString('hex').toUpperCase();
-                const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
-                const coupon = await client.query(`INSERT INTO coupons (public_reference, secure_code_hash, reward_id, user_id, seller_id, request_id)
-                    VALUES ('CPN-' || upper(substr(md5(random()::text), 1, 10)), $1, $2, $3, $4, $5)
-                    ON CONFLICT (request_id) DO NOTHING
-                    RETURNING id, public_reference, reward_id, user_id, seller_id, request_id, status, created_at`, [codeHash, reward.rows[0].id, user_id, reward.rows[0].seller_id, request_id]);
-                const issuedCoupon = coupon.rows[0] ? { ...coupon.rows[0], code: rawCode, reward_value: points } : null;
-                if (coupon.rows[0]) await client.query('INSERT INTO coupon_events (coupon_id, event_type, metadata) VALUES ($1, $2, $3)', [coupon.rows[0].id, 'ISSUED', JSON.stringify({ request_id, points })]);
-                result.rows[0].points_awarded = points;
-                result.rows[0].coupon = issuedCoupon;
-            } else {
-                await audit(client, { actorId: user_id, actorRole: 'user', action: 'COMPLETION_REJECTED_NOT_YET', entityType: 'request', entityId: request_id, previousValue: { status: 'completion_pending', actual_weight: result.rows[0].actual_weight }, newValue: { status: 'in_progress' } });
-            }
-            await client.query('COMMIT');
-            res.json({ success: true, request: result.rows[0], points_added: action === 'confirm' ? Number(result.rows[0].points_awarded || 0) : 0, coupon: result.rows[0].coupon || null });
-        } catch (transactionError) {
-            await client.query('ROLLBACK');
-            throw transactionError;
-        } finally {
-            client.release();
-        }
-    } catch (error) {
-        console.error('Error confirming completion:', error);
-        res.status(500).json({ error: 'Failed to confirm completion' });
-    }
+    res.status(410).json({ error: 'This workflow is retired. Use the v2 weight-confirmation endpoint.' });
 });
 
 // ================= Report Environmental Issue =================
 
-app.post("/report", upload.single("image"), async (req, res) => {
+app.post("/report", reportUpload.single("image"), async (req, res) => {
+    let reportStage = 'image_analysis';
+    let storedReportImagePath = null;
 
     try {
 
@@ -1650,7 +1693,10 @@ app.post("/report", upload.single("image"), async (req, res) => {
             address,
             description,
             latitude,
-            longitude
+            longitude,
+            capturedAt,
+            captureAccuracy,
+            captureMethod
         } = req.body;
 
         if (
@@ -1668,52 +1714,143 @@ app.post("/report", upload.single("image"), async (req, res) => {
 
         }
 
+        const photoLatitude = Number(latitude);
+        const photoLongitude = Number(longitude);
+        const photoAccuracy = Number(captureAccuracy);
+        const photoCapturedAt = new Date(capturedAt);
+        if (
+            !Number.isFinite(photoLatitude) || photoLatitude < -90 || photoLatitude > 90 ||
+            !Number.isFinite(photoLongitude) || photoLongitude < -180 || photoLongitude > 180 ||
+            !Number.isFinite(photoAccuracy) || photoAccuracy < 0 ||
+            !capturedAt || Number.isNaN(photoCapturedAt.getTime()) ||
+            !['camera', 'upload'].includes(captureMethod)
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Valid photo GPS coordinates, accuracy, and capture time are required."
+            });
+        }
+
         console.log("========== New Environmental Report ==========");
 
         console.log({
-            image: req.file.filename,
+            imageMimeType: req.file.mimetype,
             problemType,
             address,
             description,
             latitude,
-            longitude
+            longitude: photoLongitude,
+            capturedAt: photoCapturedAt.toISOString(),
+            captureAccuracy: photoAccuracy,
+            captureMethod
         });
 
-const result = await analyzeImage(req.file.path);
+        const result = await analyzeImage(req.file.buffer, req.file.mimetype);
 
-if (!result.valid) {
+        if (!result.contains_trash) {
+            return res.status(422).json({
+                success: false,
+                message: "No visible trash or discarded waste was detected in the uploaded image.",
+                ai: result
+            });
+        }
 
-    return res.status(400).json({
+        reportStage = 'report_storage';
+        const imageExtension = REPORT_IMAGE_EXTENSIONS[req.file.mimetype];
+        if (!imageExtension) {
+            throw new Error('Uploaded report image has an unsupported MIME type.');
+        }
+        const imageFilename = `${crypto.randomUUID()}${imageExtension}`;
+        await fs.promises.mkdir(REPORT_IMAGE_DIR, { recursive: true });
+        storedReportImagePath = path.join(REPORT_IMAGE_DIR, imageFilename);
+        await fs.promises.writeFile(storedReportImagePath, req.file.buffer, { flag: 'wx' });
 
-        success: false,
-
-        message: "The uploaded image is not an environmental issue.",
-
-        ai: result,
-
-    });
-
-}
-        res.json({
-            success: true,
-            message: "Report submitted successfully.",
-            report: {
-                image: req.file.filename,
+        const savedReport = await db.query(
+            `INSERT INTO reports
+                (problem_type, address, description, image, latitude, longitude,
+                 ai_valid, ai_contains_trash, ai_confidence, ai_reason,
+                 captured_at, capture_accuracy_m, capture_method)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             RETURNING id, created_at`,
+            [
                 problemType,
                 address,
                 description,
-                latitude,
-                longitude
+                imageFilename,
+                photoLatitude,
+                photoLongitude,
+                true,
+                true,
+                Math.max(0, Math.min(100, Math.round(result.confidence))),
+                result.reason,
+                photoCapturedAt,
+                photoAccuracy,
+                captureMethod
+            ]
+        );
+        storedReportImagePath = null;
+        res.json({
+            success: true,
+            message: "Report submitted successfully.",
+            ai: result,
+            report: {
+                id: savedReport.rows[0].id,
+                problemType,
+                address,
+                description,
+                latitude: photoLatitude,
+                longitude: photoLongitude,
+                capturedAt: photoCapturedAt.toISOString(),
+                captureAccuracy: photoAccuracy,
+                captureMethod,
+                submittedAt: savedReport.rows[0].created_at
             }
         });
 
     } catch (err) {
 
-        console.error(err);
+        if (storedReportImagePath) {
+            try {
+                await fs.promises.unlink(storedReportImagePath);
+            } catch (cleanupError) {
+                if (cleanupError.code !== 'ENOENT') {
+                    console.error('Failed to remove unlinked report image:', {
+                        message: cleanupError.message,
+                        code: cleanupError.code
+                    });
+                }
+            }
+        }
 
-        res.status(500).json({
+        console.error(`Environmental report ${reportStage} failed:`, {
+            message: err.message,
+            code: err.code,
+            status: err.status
+        });
+
+        let statusCode = 500;
+        let errorMessage = "The report could not be saved. Check the backend log for database or image-storage errors.";
+        if (reportStage === 'image_analysis') {
+            statusCode = 503;
+            if (err.status === 401 || err.status === 403) {
+                errorMessage = `Gemini rejected the API key or its permissions (HTTP ${err.status}). Check that GEMINI_API_KEY is an active Gemini API key and that the Gemini API is enabled.`;
+            } else if (err.status === 429) {
+                errorMessage = "Gemini API quota or rate limit was reached. Try again later or check your Google AI Studio quota.";
+            } else if (err.status === 400) {
+                errorMessage = "Gemini rejected the image request (HTTP 400). Check the image format and the backend log for Google's error details.";
+            } else if (err.status === 404) {
+                errorMessage = "The configured Gemini model is unavailable (HTTP 404). Check GEMINI_MODEL and confirm that the model is available to this API key's project.";
+            } else {
+                const providerStatus = err.status ? ` (HTTP ${err.status})` : '';
+                errorMessage = `Gemini image analysis failed${providerStatus}. Check the backend log for Google's error details and verify the API key and network connection.`;
+            }
+        }
+
+        res.status(statusCode).json({
             success: false,
-            error: "Internal Server Error"
+            error: errorMessage,
+            stage: reportStage,
+            providerStatus: reportStage === 'image_analysis' ? (err.status || err.statusCode || null) : undefined
         });
 
     }
@@ -1723,6 +1860,14 @@ if (!result.valid) {
 
 const applyPlatformMigration = async () => {
     const migrationPath = path.join(__dirname, 'migrations', '001_platform_core.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
+const applyCouponRemovalMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '008_remove_coupons_and_rewards.sql');
     const migration = fs.readFileSync(migrationPath, 'utf8');
     for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
         await db.query(statement);
@@ -1745,8 +1890,32 @@ const applyDeferredProductPointsMigration = async () => {
     }
 };
 
+const applyProductOrderSafetyMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '009_reserve_points_and_expire_product_orders.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
 const applyAdminAccountsMigration = async () => {
     const migrationPath = path.join(__dirname, 'migrations', '006_admin_accounts.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
+const applySellerTaxPointsMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '010_seller_tax_point_credits.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+        await db.query(statement);
+    }
+};
+
+const applyReportCaptureMigration = async () => {
+    const migrationPath = path.join(__dirname, 'migrations', '011_report_capture_metadata.sql');
     const migration = fs.readFileSync(migrationPath, 'utf8');
     for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
         await db.query(statement);
@@ -1767,17 +1936,20 @@ Promise.all([
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (request_id, collector_id)
     )`),
-    applyPlatformMigration(),
-    applySellerProductsMigration().then(() => applyDeferredProductPointsMigration()),
-    applyAdminAccountsMigration()
+    applyPlatformMigration().then(() => applyCouponRemovalMigration()),
+    applySellerProductsMigration().then(() => applyDeferredProductPointsMigration()).then(() => applyProductOrderSafetyMigration()),
+    applyAdminAccountsMigration().then(() => applySellerTaxPointsMigration()),
+    applyReportCaptureMigration()
 ]).then(() => {
     setInterval(processNotificationOutbox, 5000);
+    setInterval(() => {
+        processExpiredProductOrders().catch(error => console.error('Product order expiration failed:', error));
+    }, 30000);
+    processExpiredProductOrders().catch(error => console.error('Product order expiration failed:', error));
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
     });
 }).catch((error) => {
     console.error('Database migration failed:', error);
-    app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-    });
+    process.exit(1);
 });

@@ -1,103 +1,114 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, "db.env") });
+
 const fs = require("fs");
 const path = require("path");
-const Groq = require("groq-sdk");
+const { GoogleGenAI } = require("@google/genai");
 
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-});
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
 async function analyzeImage(imageSource, mimeType = "image/jpeg", maxRetries = 3) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is not configured.");
+    }
+
+    let imageBuffer;
+    if (typeof imageSource === "string") {
+        const fullPath = path.resolve(imageSource);
+        imageBuffer = fs.readFileSync(fullPath);
+        const ext = path.extname(fullPath).toLowerCase();
+        if (ext === ".png") mimeType = "image/png";
+        else if (ext === ".webp") mimeType = "image/webp";
+        else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
+    } else if (Buffer.isBuffer(imageSource)) {
+        imageBuffer = imageSource;
+    } else {
+        throw new TypeError("Image source must be a file path or a Buffer.");
+    }
+
+    if (mimeType === "image/jpg") mimeType = "image/jpeg";
+
+    const ai = new GoogleGenAI({ apiKey });
     let attempt = 0;
-    
+
     while (attempt < maxRetries) {
         try {
-            let imageBuffer;
-            if (typeof imageSource === "string") {
-                const fullPath = path.resolve(imageSource);
-                imageBuffer = fs.readFileSync(fullPath);
-                const ext = path.extname(fullPath).toLowerCase();
-                if (ext === ".png") mimeType = "image/png";
-                else if (ext === ".webp") mimeType = "image/webp";
-                else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
-                else if (ext === ".gif") mimeType = "image/gif";
-            } else {
-                imageBuffer = imageSource;
-            }
-
-            const response = await groq.chat.completions.create({
-                model: "meta-llama/llama-4-scout-17b-16e-instruct",
-                messages: [
+            const response = await ai.models.generateContent({
+                model: MODEL,
+                contents: [
                     {
                         role: "user",
-                        content: [
+                        parts: [
                             {
-                                type: "text",
-                                text: `You are an environmental inspection AI.
+                                text: `Check whether this photo visibly contains discarded trash.
 
-Determine whether this image shows a real environmental issue.
+Set contains_trash to true only when discarded waste is visibly present, such as litter, scattered garbage, plastic waste, or an illegal dump. Do not count clean scenery, ordinary objects that are being used, properly sorted recyclables, or trash fully contained in a normal bin. Judge only what is visible in the photo; do not infer trash from the user's description or location.
 
-Examples:
-- Garbage
-- Plastic waste
-- Illegal dumping
-- Water pollution
-- Air pollution
-- Sewage
-- Construction waste
-
-Reply ONLY with valid JSON.
-
-{
-  "valid": true,
-  "confidence": 95,
-  "reason": "Short explanation"
-}`,
+If the image is unclear, set contains_trash to false and explain that it is unclear. Give a short explanation in Arabic.`,
                             },
                             {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${mimeType};base64,${imageBuffer.toString("base64")}`,
+                                inlineData: {
+                                    mimeType,
+                                    data: imageBuffer.toString("base64"),
                                 },
                             },
                         ],
                     },
                 ],
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            contains_trash: { type: "BOOLEAN" },
+                            confidence: { type: "NUMBER" },
+                            reason: { type: "STRING" },
+                        },
+                        required: ["contains_trash", "confidence", "reason"],
+                    },
+                },
             });
 
-            const text = response.choices[0].message.content.trim();
-            
-            // تنظيف النص في حال أرجع النموذج علامات الـ markdown الخاصة بالكود
-            const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const text = response.text;
+            if (typeof text !== "string" || !text.trim()) {
+                throw new Error("Gemini returned an empty image-analysis response.");
+            }
 
-            return JSON.parse(cleanText);
+            const result = JSON.parse(text);
+            if (
+                typeof result.contains_trash !== "boolean" ||
+                typeof result.confidence !== "number" ||
+                !Number.isFinite(result.confidence) ||
+                typeof result.reason !== "string"
+            ) {
+                throw new Error("Gemini returned an invalid image-analysis response.");
+            }
 
+            result.confidence = Math.max(0, Math.min(100, Math.round(result.confidence)));
+            result.valid = result.contains_trash;
+            return result;
         } catch (err) {
             attempt++;
-            
-            // Handle 429 quota errors with retry
-            if (err.status === 429 && attempt < maxRetries) {
-                const retryDelay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-                console.log(`Quota exceeded, retrying in ${Math.round(retryDelay / 1000)}s (attempt ${attempt}/${maxRetries})`);
-                await new Promise(resolve => setTimeout(resolve, retryDelay));
+            const status = err.status || err.statusCode;
+            if ((status === 429 || status >= 500) && attempt < maxRetries) {
+                const delay = Math.pow(2, attempt) * 1000;
+                console.warn(`Gemini request failed with status ${status}; retrying in ${delay}ms (attempt ${attempt}/${maxRetries}).`);
+                await new Promise(resolve => setTimeout(resolve, delay));
                 continue;
             }
-            
-            console.error("Gemini Error:", err);
-            return {
-                valid: false,
-                confidence: 0,
-                reason: err.message,
-            };
+
+            console.error("Gemini image analysis failed:", {
+                message: err.message,
+                status,
+                model: MODEL,
+                code: err.code,
+                name: err.name
+            });
+            throw err;
         }
     }
-    
-    return {
-        valid: false,
-        confidence: 0,
-        reason: "Max retries exceeded due to quota limits",
-    };
-}
 
+    throw new Error("Gemini image analysis failed after retries.");
+}
 
 module.exports = analyzeImage;

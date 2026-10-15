@@ -47,6 +47,11 @@ export default function ReportComplaint() {
   const [position, setPosition] = useState([30.0444, 31.2357]);
 
   const [capturedImage, setCapturedImage] = useState(null);
+  const [captureDetails, setCaptureDetails] = useState(null);
+  const [lastAnalysis, setLastAnalysis] = useState(null);
+  const [capturing, setCapturing] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const [imageFile, setImageFile] = useState(null);
   const [cameraStarted, setCameraStarted] = useState(false);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -81,31 +86,120 @@ export default function ReportComplaint() {
     return new File([u8arr], filename, { type: mime });
   };
 
-  const capturePhoto = () => {
+  const getFreshLocation = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("This browser does not support location services."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 15000,
+    });
+  });
+
+  const createCaptureDetails = (location, source) => ({
+    latitude: location.coords.latitude,
+    longitude: location.coords.longitude,
+    accuracy: location.coords.accuracy,
+    capturedAt: new Date().toISOString(),
+    source,
+  });
+
+  const capturePhoto = async () => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
 
-    if (!video || !canvas) return;
+    if (!video || !canvas || !video.videoWidth) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    setCapturing(true);
+    try {
+      const location = await getFreshLocation();
 
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const image = canvas.toDataURL("image/jpeg");
-    setCapturedImage(image);
+      const details = createCaptureDetails(location, "camera");
+      setCapturedImage(canvas.toDataURL("image/jpeg"));
+      setCaptureDetails(details);
+      setImageFile(null);
+      setLastAnalysis(null);
+      setCameraError("");
+      setPosition([details.latitude, details.longitude]);
 
-    const stream = videoRef.current?.srcObject;
+      const stream = video.srcObject;
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      setCameraStarted(false);
+    } catch (locationError) {
+      console.error("Could not record photo location:", locationError);
+      setCameraError(
+        locationError.code === 1
+          ? "Allow location access in your browser settings, then capture the photo again."
+          : "Could not get your GPS location. Check location services and try again."
+      );
+    } finally {
+      setCapturing(false);
+    }
+  };
 
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
+  const handleImageUpload = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setCameraError("Choose a JPG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setCameraError("The image must be smaller than 10 MB.");
+      return;
     }
 
-    setCameraStarted(false);
+    setCapturing(true);
+    setCameraError("");
+    try {
+      const [location, imageData] = await Promise.all([
+        getFreshLocation(),
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error("Could not read the selected image."));
+          reader.readAsDataURL(file);
+        }),
+      ]);
+      const details = createCaptureDetails(location, "upload");
+      setImageFile(file);
+      setCapturedImage(imageData);
+      setCaptureDetails(details);
+      setLastAnalysis(null);
+      setPosition([details.latitude, details.longitude]);
+    } catch (uploadError) {
+      console.error("Could not prepare uploaded photo:", uploadError);
+      setCameraError(
+        uploadError.code === 1
+          ? "Allow location access to attach the current GPS location to this image."
+          : uploadError.message || "Could not prepare the selected image."
+      );
+    } finally {
+      setCapturing(false);
+    }
   };
 
   const startCamera = async () => {
+    setCameraError("");
+    if (!window.isSecureContext) {
+      setCameraError("Camera access requires HTTPS, or localhost while developing. Open the app on a secure connection.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("This browser does not support camera access. Try a recent version of Chrome, Edge, or Firefox.");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -115,11 +209,21 @@ export default function ReportComplaint() {
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+      } else {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("Camera preview is unavailable. Please try again.");
       }
       setCameraStarted(true);
     } catch (err) {
-      console.error(err);
-      alert("Cannot access camera.");
+      console.error("Camera access failed:", err);
+      const messages = {
+        NotAllowedError: "Camera permission was denied. Allow camera access for this site in your browser settings, then try again.",
+        NotFoundError: "No camera was found on this device.",
+        NotReadableError: "The camera is already in use by another app. Close that app and try again.",
+        OverconstrainedError: "The requested camera is unavailable. Try another browser or camera.",
+        SecurityError: "The browser blocked camera access. Open the app over HTTPS or localhost.",
+      };
+      setCameraError(messages[err.name] || err.message || "Could not access the camera. Check browser permissions and try again.");
     }
   };
 
@@ -149,17 +253,25 @@ export default function ReportComplaint() {
       alert("Please capture an image first.");
       return;
     }
+    if (!captureDetails) {
+      alert("Capture the image again so its location and capture time can be recorded.");
+      return;
+    }
 
+    setLoading(true);
     try {
-      const imageFile = dataURLtoFile(capturedImage, "report.jpg");
+      const selectedImageFile = imageFile || dataURLtoFile(capturedImage, "report.jpg");
 
       const form = new FormData();
-      form.append("image", imageFile);
+      form.append("image", selectedImageFile);
       form.append("problemType", formData.problemType);
       form.append("address", formData.address);
       form.append("description", formData.description);
-      form.append("latitude", position[0]);
-      form.append("longitude", position[1]);
+      form.append("latitude", captureDetails.latitude);
+      form.append("longitude", captureDetails.longitude);
+      form.append("capturedAt", captureDetails.capturedAt);
+      form.append("captureAccuracy", captureDetails.accuracy);
+      form.append("captureMethod", captureDetails.source);
 
       const response = await fetch("http://localhost:4000/report", {
         method: "POST",
@@ -169,9 +281,20 @@ export default function ReportComplaint() {
       const data = await response.json();
 
       if (data.success) {
-        alert("✅ Report submitted successfully.");
+        setLastAnalysis({
+          ...data.ai,
+          latitude: data.report.latitude,
+          longitude: data.report.longitude,
+          capturedAt: data.report.capturedAt,
+          source: data.report.captureMethod,
+        });
+        alert(
+          `✅ Report submitted successfully.\n${data.ai?.reason || "تم رصد زبالة في الصورة."}`
+        );
 
         setCapturedImage(null);
+        setCaptureDetails(null);
+        setImageFile(null);
 
         setFormData({
           problemType: "",
@@ -179,11 +302,27 @@ export default function ReportComplaint() {
           description: "",
         });
       } else {
-        alert(data.error || data.message);
+        if (data.ai) {
+          setLastAnalysis({
+            ...data.ai,
+            latitude: captureDetails.latitude,
+            longitude: captureDetails.longitude,
+            capturedAt: captureDetails.capturedAt,
+            source: captureDetails.source,
+          });
+        }
+        alert(
+          data.ai?.reason ||
+            data.message ||
+            data.error ||
+            "Could not determine whether the image contains trash."
+        );
       }
     } catch (err) {
       console.error(err);
-      alert("Failed to submit report.");
+      alert(err.message || "Failed to submit report.");
+    } finally {
+      setLoading(false);
     }
   };
     return (
@@ -239,8 +378,11 @@ export default function ReportComplaint() {
             className="location-btn"
             onClick={getCurrentLocation}
           >
-            📍 Use My Current Location
+            📍 Show My Current Location
           </button>
+          <p className="capture-details-note">
+            GPS location is recorded when the photo is captured or selected. For uploaded images, the displayed time is the selection time, not necessarily when the original photo was taken.
+          </p>
 
           <div className="camera-box">
             {!cameraStarted && (
@@ -252,6 +394,16 @@ export default function ReportComplaint() {
                 📷 Open Camera
               </button>
             )}
+            <label className="image-upload-label">
+              Or choose a photo from your device
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={handleImageUpload}
+                disabled={capturing || loading}
+              />
+            </label>
+            {cameraError && <p className="camera-error" role="alert">{cameraError}</p>}
 
             <video
               ref={videoRef}
@@ -270,19 +422,39 @@ export default function ReportComplaint() {
                 type="button"
                 className="submit-btn"
                 onClick={capturePhoto}
+                disabled={capturing}
               >
-                📸 Capture
+                {capturing ? "Getting GPS..." : "📸 Capture"}
               </button>
             )}
 
             {capturedImage && (
-              <img
-                src={capturedImage}
-                alt="Captured"
-                className="captured-image"
-              />
+              <>
+                <img src={capturedImage} alt="Captured" className="captured-image" />
+                {captureDetails && (
+                  <div className="capture-details" role="status">
+                    <p>📍 Captured location: {captureDetails.latitude.toFixed(6)}, {captureDetails.longitude.toFixed(6)}</p>
+                    <p>GPS accuracy: approximately {Math.round(captureDetails.accuracy)} m</p>
+                    <p>🕒 {captureDetails.source === "camera" ? "Captured at" : "Selected at"}: {new Date(captureDetails.capturedAt).toLocaleString()}</p>
+                    <p>The image is analyzed temporarily and is not saved with the report.</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
+
+          {lastAnalysis && (
+            <div className="capture-details" role="status">
+              <strong>
+                {lastAnalysis.contains_trash
+                  ? "Image check: trash detected"
+                  : "Image check: no visible trash detected"}
+              </strong>
+              <p>{lastAnalysis.reason}</p>
+              <p>📍 Photo location: {Number(lastAnalysis.latitude).toFixed(6)}, {Number(lastAnalysis.longitude).toFixed(6)}</p>
+              <p>🕒 {lastAnalysis.source === "camera" ? "Photo time" : "Image selection time"}: {new Date(lastAnalysis.capturedAt).toLocaleString()}</p>
+            </div>
+          )}
 
           <label>Problem Type</label>
 

@@ -14,10 +14,9 @@ const STATUS_TRANSITIONS = {
 };
 
 const ROLE_PERMISSIONS = {
-  user: ['request:create', 'request:read-own', 'weight:confirm', 'weight:dispute', 'coupon:read-own'],
+  user: ['request:create', 'request:read-own', 'weight:confirm', 'weight:dispute'],
   collector: ['request:read-available', 'request:read-assigned', 'trip:start', 'arrival:confirm', 'weight:record'],
   recycler: ['batch:read', 'batch:receive', 'weight:record-receiving'],
-  merchant: ['coupon:lookup', 'coupon:redeem'],
   company: ['campaign:manage'],
   admin: ['*']
 };
